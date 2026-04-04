@@ -1,0 +1,16 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;600&display=swap');
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-family: "Geist Mono", "JetBrains Mono", "Fira Code", Consolas, monospace;
+  background: #FAF9F6;
+  color: #2C2C2C;
+  -webkit-font-smoothing: antialiased;
+}

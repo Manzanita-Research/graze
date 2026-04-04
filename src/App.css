@@ -1,0 +1,280 @@
+/* GoatPad — Moleskine aesthetic */
+
+:root {
+  --paper: #F5F0E8;
+  --ink: #2C2C2C;
+  --ink-light: #5C5C5C;
+  --border: rgba(0,0,0,.10);
+  --dot: #B8AFA2;
+}
+
+.clawpad {
+  display: flex;
+  height: 100%;
+  background: var(--paper);
+}
+
+/* ── Canvas (full width) ── */
+.canvas {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+}
+
+.canvas .tl-container {
+  position: absolute !important;
+  inset: 0 !important;
+}
+
+/* ── Left Dock (overlaid inside tldraw) ── */
+.clawpad-dock {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  bottom: 10px;
+  width: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 0;
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  z-index: 1000;
+  gap: 3px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-shadow: 0 1px 4px rgba(0,0,0,.06);
+}
+
+.dock-logo {
+  font-family: "Geist Mono", "JetBrains Mono", "Fira Code", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #999;
+  user-select: none;
+  margin-bottom: 2px;
+}
+
+.dock-logo span {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.dock-divider {
+  width: 22px;
+  height: 1px;
+  background: var(--border);
+  margin: 3px 0;
+  flex-shrink: 0;
+}
+
+.dock-spacer {
+  flex: 1;
+}
+
+/* ── Dock buttons ── */
+.dock-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-light);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  flex-shrink: 0;
+}
+
+.dock-btn:hover {
+  background: rgba(0,0,0,.05);
+  color: var(--ink);
+}
+
+/* Tool buttons — active state */
+.dock-tool.active {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+/* Pen/touch toggle */
+.dock-pen-toggle.active {
+  background: rgba(0,0,0,.08);
+  color: var(--ink);
+}
+
+/* Push button */
+.dock-btn-push {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.dock-btn-push:hover {
+  background: #1a1a1a;
+}
+
+.dock-btn-push:active {
+  background: #000;
+}
+
+.dock-btn-push.success {
+  background: #3a5a3a;
+  border-color: #3a5a3a;
+}
+
+.dock-btn-push.error {
+  background: #5a3a3a;
+  border-color: #5a3a3a;
+}
+
+.dock-btn-push:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dock-status {
+  font-family: "Geist Mono", monospace;
+  font-size: 12px;
+  font-weight: 600;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.dock-status.success { color: #3a5a3a; }
+.dock-status.error { color: #8a3a3a; }
+
+/* ── tldraw overrides ── */
+
+.tl-background {
+  background: var(--paper) !important;
+}
+
+/* Grid — moleskine dot feel */
+.tl-grid {
+  opacity: 0.55;
+}
+
+.tl-grid circle,
+.tl-grid line {
+  stroke: var(--dot) !important;
+  fill: var(--dot) !important;
+}
+
+/* Kill ALL heavy shadows */
+.tlui-toolbar,
+.tlui-toolbar__inner,
+[class*="tlui-popover__content"],
+[class*="tlui-menu"],
+[class*="tlui-dropdown"] {
+  box-shadow: none !important;
+}
+
+/* Popover menus */
+[class*="tlui-popover__content"] {
+  background: var(--paper) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,.06) !important;
+  border-radius: 8px !important;
+}
+
+/* Hide license watermark */
+.tlui-watermark_SEE-LICENSE,
+[class*="watermark"],
+a[href*="tldraw.dev"] {
+  display: none !important;
+}
+
+/* ── Sticky note — warm Moleskine tone ── */
+.tl-note__container {
+  background-color: #EDE4D3 !important;
+  box-shadow: 0 1px 4px rgba(0,0,0,.08) !important;
+}
+
+/* ── Style Panel (tldraw native — restyled) ── */
+.tlui-style-panel__wrapper {
+  background: var(--paper) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,.06) !important;
+}
+
+.tlui-style-panel {
+  font-family: "Geist Mono", "JetBrains Mono", "Fira Code", Consolas, monospace !important;
+}
+
+/* Style panel buttons */
+.tlui-style-panel .tlui-button {
+  border-radius: 6px !important;
+  color: var(--ink-light) !important;
+}
+
+.tlui-style-panel .tlui-button:hover {
+  background: rgba(0,0,0,.05) !important;
+}
+
+.tlui-style-panel .tlui-button[data-state="selected"],
+.tlui-style-panel .tlui-button[aria-pressed="true"],
+.tlui-style-panel .tlui-button[data-isactive="true"] {
+  background: var(--ink) !important;
+  color: var(--paper) !important;
+}
+
+/* Hide everything we've replaced */
+.tlui-help-menu,
+.tlui-debug-panel,
+.tlui-menu-zone,
+.tlui-navigation-zone,
+.tlui-toolbar,
+.tlui-layout__bottom {
+  display: none !important;
+}
+
+/* ── Mobile ── */
+@media (max-width: 768px) {
+  .clawpad-dock {
+    width: 40px;
+    left: 6px;
+    top: 6px;
+    bottom: 6px;
+    padding: 8px 0;
+  }
+
+  .dock-btn {
+    width: 30px;
+    height: 30px;
+  }
+}
+
+/* DC-1 e-ink */
+@media (prefers-color-scheme: light) and (monochrome) {
+  .clawpad, .tl-background {
+    background: #fff !important;
+  }
+  
+  .clawpad-dock {
+    border: 2px solid #000;
+  }
+  
+  .dock-btn-push, .dock-tool.active {
+    background: #000;
+    color: #fff;
+    border-color: #000;
+  }
+}
+
+/* Safe area for notched devices */
+@supports (padding-left: env(safe-area-inset-left)) {
+  .clawpad-dock {
+    left: calc(10px + env(safe-area-inset-left));
+  }
+}
