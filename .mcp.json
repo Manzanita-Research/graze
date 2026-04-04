@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "graze": {
+      "command": "bun",
+      "args": ["run", "mcp/index.ts"],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}",
+      "env": {
+        "GRAZE_URL": "http://localhost:3737"
+      }
+    }
+  }
+}
