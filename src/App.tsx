@@ -6,13 +6,26 @@ import {
   DefaultHorizontalAlignStyle,
   createShapeId,
   Vec,
+  type TLAssetStore,
 } from 'tldraw'
+import { useSync } from '@tldraw/sync'
 import { toRichText } from '@tldraw/tlschema'
 import 'tldraw/tldraw.css'
 import './App.css'
 
 const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:3737`
 const WS_URL = API_URL.replace(/^http/, 'ws')
+const ROOM_ID = 'graze-main'
+
+// Minimal asset store — no upload support for now
+const assetStore: TLAssetStore = {
+  async upload() {
+    throw new Error('Asset uploads not supported yet')
+  },
+  resolve(asset) {
+    return asset.props.src ?? null
+  },
+}
 
 const TOOLS = [
   { id: 'select', label: 'Select', icon: (
@@ -272,6 +285,12 @@ function App() {
   const editorRef = useRef<Editor | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
 
+  // Sync store via Cloudflare Durable Objects
+  const store = useSync({
+    uri: `${window.location.origin}/api/connect/${ROOM_ID}`,
+    assets: assetStore,
+  })
+
   // F12 keybinding for snapshot
   const handleSnapshotRef = useRef<() => void>(() => {})
 
@@ -410,7 +429,7 @@ function App() {
     <div className="graze">
       <div className="canvas">
         <Tldraw
-          persistenceKey="graze-canvas"
+          store={store}
           onMount={handleMount}
           options={options}
           components={{

@@ -1,0 +1,18 @@
+name = "graze"
+main = "worker/worker.ts"
+compatibility_date = "2025-05-08"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[assets]
+not_found_handling = "single-page-application"
+directory = "./dist/client"
+
+[durable_objects]
+bindings = [{ name = "TLDRAW_DURABLE_OBJECT", class_name = "TldrawDurableObject" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TldrawDurableObject"]
