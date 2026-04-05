@@ -215,13 +215,35 @@ function connectWebSocket() {
         console.error("graze: connected to server WebSocket");
       };
 
-      ws.onmessage = (event) => {
+      ws.onmessage = async (event) => {
         try {
           const msg = JSON.parse(event.data as string);
-          // Only forward human messages as channel notifications
+          // Forward human messages as channel notifications
           if (msg.type === "message:created" && msg.message?.from === "human") {
             const notification = buildChannelNotification(msg.message);
             mcp.notification(notification);
+          }
+          // Forward canvas snapshots as channel notifications
+          if (msg.type === "snapshot:created") {
+            try {
+              const result = (await apiGet("/api/canvas/snapshot")) as {
+                snapshot: { dataUrl: string; timestamp: string } | null;
+              };
+              if (result.snapshot) {
+                mcp.notification({
+                  method: "notifications/claude/channel" as const,
+                  params: {
+                    content: "The human sent a canvas snapshot. Use read_canvas to see it.",
+                    meta: {
+                      timestamp: msg.timestamp,
+                      type: "snapshot",
+                    },
+                  },
+                });
+              }
+            } catch {
+              // ignore fetch errors
+            }
           }
         } catch {
           // ignore malformed messages

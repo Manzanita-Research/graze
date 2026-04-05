@@ -126,6 +126,7 @@ async function handleRequest(req: Request): Promise<Response> {
       });
     }
     canvasSnapshot = { dataUrl: body.dataUrl, timestamp: new Date().toISOString() };
+    broadcast({ type: "snapshot:created", timestamp: canvasSnapshot.timestamp });
     return new Response(JSON.stringify({ ok: true, timestamp: canvasSnapshot.timestamp }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

@@ -272,6 +272,20 @@ function App() {
   const editorRef = useRef<Editor | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
 
+  // F12 keybinding for snapshot
+  const handleSnapshotRef = useRef<() => void>(() => {})
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F12') {
+        e.preventDefault()
+        handleSnapshotRef.current()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   // Connect WebSocket and handle shape creation events
   useEffect(() => {
     function connect() {
@@ -380,6 +394,9 @@ function App() {
       console.error('Snapshot failed:', err)
     }
   }, [])
+
+  // Keep ref in sync for F12 handler
+  useEffect(() => { handleSnapshotRef.current = handleSnapshot }, [handleSnapshot])
 
   const handleClear = useCallback(() => {
     const editor = editorRef.current
