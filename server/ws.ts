@@ -2,7 +2,7 @@ import type { ServerWebSocket } from "bun";
 
 export type WsMessage =
   | { type: "message:created"; message: Record<string, unknown> }
-  | { type: "message:from_agent"; message: Record<string, unknown> };
+  | { type: "shape:created"; message: Record<string, unknown> };
 
 const clients = new Set<ServerWebSocket<unknown>>();
 

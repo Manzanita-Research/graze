@@ -6,9 +6,9 @@
  * arrive as <channel source="graze"> events in Claude Code.
  *
  * Tools:
- *   post_message  — send a text message to the Graze canvas
- *   read_messages  — read recent messages from the canvas
- *   read_canvas    — get the latest canvas snapshot as a base64 PNG
+ *   reply         — send a text reply that appears as a shape on the canvas
+ *   read_messages — read recent messages from the canvas
+ *   read_canvas   — get the latest canvas snapshot as a base64 PNG
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -63,8 +63,8 @@ function buildChannelNotification(message: { id: string; text: string; timestamp
 
 const INSTRUCTIONS = `You are connected to Graze — an ink surface where agents browse.
 
-Graze is a collaborative tldraw canvas with a message sidebar. You can:
-- Send messages to the human via post_message
+Graze is a collaborative tldraw canvas. You can:
+- Reply to the human via the reply tool — your text appears as a shape on the canvas
 - Read recent messages via read_messages
 - Read the current canvas state (as a PNG screenshot) via read_canvas
 
@@ -79,7 +79,7 @@ Keep messages concise — this is a scratchpad, not a chat app.`;
 // --- MCP Server ---
 
 const mcp = new Server(
-  { name: "graze", version: "0.1.0" },
+  { name: "graze", version: "0.2.0" },
   {
     capabilities: {
       experimental: { "claude/channel": {} },
@@ -94,15 +94,15 @@ const mcp = new Server(
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
-      name: "post_message",
+      name: "reply",
       description:
-        "Send a message to the Graze canvas sidebar. The human will see it in real-time.",
+        "Send a reply to the Graze canvas. The text appears as a shape on the canvas that the human can see in real-time.",
       inputSchema: {
         type: "object" as const,
         properties: {
           text: {
             type: "string",
-            description: "The message text to display",
+            description: "The message text to display on the canvas",
           },
         },
         required: ["text"],
@@ -111,7 +111,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "read_messages",
       description:
-        "Read recent messages from the Graze canvas sidebar.",
+        "Read recent messages from the Graze canvas.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -138,14 +138,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params;
   const a = (args ?? {}) as Record<string, unknown>;
 
-  if (name === "post_message") {
+  if (name === "reply") {
     const text = a.text as string;
-    const msg = await apiPost("/api/message", { from: "agent", text });
+    await apiPost("/api/shape", { from: "agent", text });
     return {
       content: [
         {
           type: "text" as const,
-          text: `Message sent to Graze canvas.`,
+          text: `Reply sent to Graze canvas.`,
         },
       ],
     };

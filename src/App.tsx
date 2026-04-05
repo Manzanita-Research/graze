@@ -4,19 +4,15 @@ import {
   Editor,
   useEditor,
   DefaultHorizontalAlignStyle,
+  createShapeId,
+  Vec,
 } from 'tldraw'
+import { toRichText } from '@tldraw/tlschema'
 import 'tldraw/tldraw.css'
 import './App.css'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3737'
+const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:3737`
 const WS_URL = API_URL.replace(/^http/, 'ws')
-
-interface Message {
-  id: string
-  from: 'human' | 'agent'
-  text: string
-  timestamp: string
-}
 
 const TOOLS = [
   { id: 'select', label: 'Select', icon: (
@@ -48,7 +44,59 @@ const TOOLS = [
   )},
 ]
 
-/** Zoom helpers: two-finger double-tap resets to 100%, pinch snaps through 100% */
+/** Find the lowest point of all existing shapes to place new ones below */
+function getNextY(editor: Editor): number {
+  const shapes = editor.getCurrentPageShapes()
+  if (shapes.length === 0) return 100
+
+  let maxBottom = 0
+  for (const shape of shapes) {
+    const bounds = editor.getShapePageBounds(shape.id)
+    if (bounds) {
+      const bottom = bounds.maxY
+      if (bottom > maxBottom) maxBottom = bottom
+    }
+  }
+  return maxBottom + 40
+}
+
+/** Create a note shape on the canvas for an agent message */
+function createAgentShape(editor: Editor, text: string, id: string) {
+  const y = getNextY(editor)
+  const shapeId = createShapeId(id)
+
+  editor.createShape({
+    id: shapeId,
+    type: 'note',
+    x: 120,
+    y,
+    props: {
+      richText: toRichText(text),
+      color: 'light-green',
+      size: 'm',
+    },
+  })
+}
+
+/** Create a note shape for a human message */
+function createHumanShape(editor: Editor, text: string, id: string) {
+  const y = getNextY(editor)
+  const shapeId = createShapeId(id)
+
+  editor.createShape({
+    id: shapeId,
+    type: 'note',
+    x: 120,
+    y,
+    props: {
+      richText: toRichText(text),
+      color: 'light-blue',
+      size: 'm',
+    },
+  })
+}
+
+/** Zoom helpers */
 function ZoomHelper() {
   const editor = useEditor()
 
@@ -79,7 +127,7 @@ function ZoomHelper() {
       if (now - lastTwoFingerTap < 500) {
         lastTwoFingerTap = 0
         twoFingerStart = 0
-        editor.resetZoom(tapCenter, { animation: { duration: 200 } })
+        editor.resetZoom(new Vec(tapCenter.x, tapCenter.y), { animation: { duration: 200 } })
       } else {
         lastTwoFingerTap = now
       }
@@ -176,17 +224,10 @@ function ToolDock({ onClear, onSnapshot }: {
   )
 }
 
-/** Message sidebar */
-function MessagePanel({ messages, onSend }: {
-  messages: Message[]
-  onSend: (text: string) => void
-}) {
+/** Floating message input (replaces sidebar) */
+function MessageInput({ onSend }: { onSend: (text: string) => void }) {
   const [input, setInput] = useState('')
-  const bottomRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages.length])
+  const [expanded, setExpanded] = useState(false)
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -194,56 +235,69 @@ function MessagePanel({ messages, onSend }: {
     if (!text) return
     onSend(text)
     setInput('')
+    setExpanded(false)
+  }
+
+  if (!expanded) {
+    return (
+      <button
+        className="graze-chat-fab"
+        onClick={() => setExpanded(true)}
+        title="Send a message"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+        </svg>
+      </button>
+    )
   }
 
   return (
-    <div className="graze-messages">
-      <div className="messages-header">Messages</div>
-      <div className="messages-list">
-        {messages.map((msg) => (
-          <div key={msg.id} className={`message message-${msg.from}`}>
-            <span className="message-from">{msg.from === 'human' ? 'you' : 'agent'}</span>
-            <span className="message-text">{msg.text}</span>
-          </div>
-        ))}
-        <div ref={bottomRef} />
-      </div>
-      <form className="messages-input" onSubmit={handleSubmit}>
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Send a message..."
-        />
-        <button type="submit">↑</button>
-      </form>
-    </div>
+    <form className="graze-chat-input" onSubmit={handleSubmit}>
+      <input
+        type="text"
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        placeholder="Message the agent..."
+        autoFocus
+        onBlur={() => { if (!input.trim()) setExpanded(false) }}
+        onKeyDown={(e) => { if (e.key === 'Escape') setExpanded(false) }}
+      />
+      <button type="submit">↑</button>
+    </form>
   )
 }
 
 function App() {
   const editorRef = useRef<Editor | null>(null)
-  const [messages, setMessages] = useState<Message[]>([])
   const wsRef = useRef<WebSocket | null>(null)
 
-  // Load initial messages + connect WebSocket
+  // Connect WebSocket and handle shape creation events
   useEffect(() => {
-    // Fetch existing messages
-    fetch(`${API_URL}/api/messages?limit=50`)
-      .then((r) => r.json())
-      .then((data) => setMessages(data.messages ?? []))
-      .catch(() => {})
-
-    // WebSocket for real-time updates
     function connect() {
       const ws = new WebSocket(WS_URL)
       wsRef.current = ws
 
       ws.onmessage = (event) => {
         try {
-          const msg = JSON.parse(event.data)
-          if (msg.type === 'message:created' && msg.message) {
-            setMessages((prev) => [...prev, msg.message])
+          const data = JSON.parse(event.data)
+          const editor = editorRef.current
+          if (!editor) return
+
+          // Agent reply → create shape on canvas
+          if (data.type === 'shape:created' && data.message) {
+            const msg = data.message
+            if (msg.from === 'agent') {
+              createAgentShape(editor, msg.text, msg.id)
+            }
+          }
+
+          // Human message → also create shape on canvas (from other devices)
+          if (data.type === 'message:created' && data.message) {
+            const msg = data.message
+            if (msg.from === 'human') {
+              createHumanShape(editor, msg.text, msg.id)
+            }
           }
         } catch {}
       }
@@ -273,7 +327,7 @@ function App() {
     editor.setStyleForNextShapes(DefaultHorizontalAlignStyle, 'middle')
 
     editor.sideEffects.registerAfterChangeHandler('shape', (prev, next) => {
-      if (next.type === 'highlight' && !prev.props.isComplete && next.props.isComplete) {
+      if (next.type === 'highlight' && !(prev.props as any).isComplete && (next.props as any).isComplete) {
         editor.sendToBack([next.id])
       }
     })
@@ -312,7 +366,6 @@ function App() {
       })
       if (!result) return
 
-      // Convert blob to base64 data URL
       const reader = new FileReader()
       reader.onload = async () => {
         const dataUrl = reader.result as string
@@ -362,7 +415,7 @@ function App() {
           />
         </Tldraw>
       </div>
-      <MessagePanel messages={messages} onSend={handleSendMessage} />
+      <MessageInput onSend={handleSendMessage} />
     </div>
   )
 }

@@ -3,10 +3,11 @@
  * Graze HTTP + WebSocket server.
  *
  * Endpoints:
- *   POST /api/message          — agent or UI posts a message
- *   GET  /api/messages         — list recent messages
- *   POST /api/canvas/snapshot  — UI posts a canvas snapshot (PNG base64)
- *   GET  /api/canvas/snapshot  — agent reads latest canvas snapshot
+ *   POST /api/shape              — create a text shape on the canvas
+ *   POST /api/message            — human or agent posts a message (also creates shape)
+ *   GET  /api/messages           — list recent messages
+ *   POST /api/canvas/snapshot    — UI posts a canvas snapshot (PNG base64)
+ *   GET  /api/canvas/snapshot    — agent reads latest canvas snapshot
  *
  * WebSocket: upgrade on any request with Upgrade: websocket
  */
@@ -15,7 +16,7 @@ import { addClient, removeClient, broadcast } from "./ws";
 
 const PORT = parseInt(process.env.GRAZE_PORT ?? "3737", 10);
 
-// --- In-memory store (no DB needed for POC) ---
+// --- In-memory store ---
 
 interface Message {
   id: string;
@@ -37,7 +38,6 @@ async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
 
-  // CORS headers for dev
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -48,7 +48,37 @@ async function handleRequest(req: Request): Promise<Response> {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
 
-  // POST /api/message — create a message (from human or agent)
+  // POST /api/shape — create a shape on the canvas (from agent reply tool)
+  if (path === "/api/shape" && req.method === "POST") {
+    const body = (await req.json()) as { from?: string; text?: string };
+    const from = body.from === "agent" ? "agent" : "human";
+    const text = (body.text ?? "").trim();
+    if (!text) {
+      return new Response(JSON.stringify({ error: "text required" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const msg: Message = {
+      id: newId(),
+      from: from as "human" | "agent",
+      text,
+      timestamp: new Date().toISOString(),
+    };
+    messages.push(msg);
+    if (messages.length > 200) messages.splice(0, messages.length - 200);
+
+    // Broadcast as shape event — frontend will create a tldraw shape
+    broadcast({ type: "shape:created", message: msg as unknown as Record<string, unknown> });
+
+    return new Response(JSON.stringify(msg), {
+      status: 201,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  // POST /api/message — create a message (backwards compat + human input)
   if (path === "/api/message" && req.method === "POST") {
     const body = (await req.json()) as { from?: string; text?: string };
     const from = body.from === "agent" ? "agent" : "human";
@@ -67,7 +97,6 @@ async function handleRequest(req: Request): Promise<Response> {
       timestamp: new Date().toISOString(),
     };
     messages.push(msg);
-    // Keep last 200 messages
     if (messages.length > 200) messages.splice(0, messages.length - 200);
 
     broadcast({ type: "message:created", message: msg as unknown as Record<string, unknown> });
@@ -78,7 +107,7 @@ async function handleRequest(req: Request): Promise<Response> {
     });
   }
 
-  // GET /api/messages — list messages
+  // GET /api/messages
   if (path === "/api/messages" && req.method === "GET") {
     const limit = parseInt(url.searchParams.get("limit") ?? "50", 10);
     const recent = messages.slice(-limit);
@@ -87,7 +116,7 @@ async function handleRequest(req: Request): Promise<Response> {
     });
   }
 
-  // POST /api/canvas/snapshot — UI sends canvas screenshot
+  // POST /api/canvas/snapshot
   if (path === "/api/canvas/snapshot" && req.method === "POST") {
     const body = (await req.json()) as { dataUrl?: string };
     if (!body.dataUrl) {
@@ -102,7 +131,7 @@ async function handleRequest(req: Request): Promise<Response> {
     });
   }
 
-  // GET /api/canvas/snapshot — agent reads latest canvas screenshot
+  // GET /api/canvas/snapshot
   if (path === "/api/canvas/snapshot" && req.method === "GET") {
     if (!canvasSnapshot) {
       return new Response(JSON.stringify({ snapshot: null }), {
@@ -120,6 +149,7 @@ async function handleRequest(req: Request): Promise<Response> {
 // --- Start ---
 
 Bun.serve({
+  hostname: "0.0.0.0",
   port: PORT,
   fetch(req, server) {
     if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
