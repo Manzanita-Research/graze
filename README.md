@@ -1,6 +1,8 @@
 # Graze
 
-A shared sketchbook for you and your agents. Napkin sketches, UI diagrams, anarchy symbols and that Cool S Thing.
+A shared sketchbook for you and your agents. Napkin sketches, UI wireframes & architecture diagrams, or just pass back & forth love notes and that Cool S Thing.
+
+Runs in any browser but optimized for [Daylight](https://daylightcomputer.com) so you can spend your summer touching grass inside of touching tmux.
 
 ## What is this?
 
