@@ -1,7 +1,7 @@
 # Graze
 
-> A shared sketchbook for you and your agents,
-> so you can touch grass instead of touching tmux
+**A shared sketchbook for you and your agents,**
+**so you can touch grass instead of touching tmux**
 
 Napkin sketches, UI wireframes & architecture diagrams, or just pass back & forth love notes and that Cool S Thing.
 
