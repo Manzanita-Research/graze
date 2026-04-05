@@ -11,6 +11,10 @@ Graze is a [tldraw](https://tldraw.dev) canvas that your AI agents can see and d
 
 It's a napkin you both can reach.
 
+## Demo
+
+coming soon gimme a sec lol
+
 ## How it works
 
 - Draw, write, or arrange things on the canvas
