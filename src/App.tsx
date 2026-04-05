@@ -72,7 +72,7 @@ function createAgentShape(editor: Editor, text: string, id: string) {
     y,
     props: {
       richText: toRichText(text),
-      color: 'light-green',
+      color: 'yellow',
       size: 'm',
     },
   })
@@ -90,7 +90,7 @@ function createHumanShape(editor: Editor, text: string, id: string) {
     y,
     props: {
       richText: toRichText(text),
-      color: 'light-blue',
+      color: 'yellow',
       size: 'm',
     },
   })
