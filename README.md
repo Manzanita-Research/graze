@@ -1,8 +1,9 @@
 # Graze
 
-A shared sketchbook for you and your agents. Napkin sketches, UI wireframes & architecture diagrams, or just pass back & forth love notes and that Cool S Thing.
+> A shared sketchbook for you and your agents,
+> so you can touch grass instead of touching tmux
 
-Runs in any browser but optimized for [Daylight](https://daylightcomputer.com) so you can spend your summer touching grass inside of touching tmux.
+Napkin sketches, UI wireframes & architecture diagrams, or just pass back & forth love notes and that Cool S Thing.
 
 ## What is this?
 
@@ -16,6 +17,13 @@ It's a napkin you both can reach.
 - Press **F12** (or tap the snapshot button) to send what you see to your agent
 - Your agent reads the snapshot and replies — text appears as a sticky note on the canvas
 - Keep going. Draw more, reply, rearrange. It's a conversation in space, not a chat log
+
+## Suggested Pairings
+- [Daylight DC-1](https://daylightcomputer.com) or iPad
+- Private Tailscale network
+- A picnic blanket
+- Sunglasses
+- Sunshine
 
 ## Network model
 
