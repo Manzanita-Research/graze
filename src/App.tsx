@@ -332,6 +332,48 @@ function App() {
               createHumanShape(editor, msg.text, msg.id)
             }
           }
+
+          // Agent creates an arbitrary shape
+          if (data.type === 'canvas:create_shape' && data.shape) {
+            const s = data.shape
+            editor.createShape({
+              id: s.id ? createShapeId(s.id as string) : createShapeId(),
+              type: ((s.type as string) ?? 'geo') as 'geo',
+              x: (s.x as number) ?? 0,
+              y: (s.y as number) ?? 0,
+              props: (s.props as Record<string, unknown>) ?? {},
+            } as any)
+          }
+
+          // Agent updates a shape's props
+          if (data.type === 'canvas:update_shape') {
+            const shapes = editor.getCurrentPageShapes()
+            const target = shapes.find(sh => sh.id.includes(data.shapeId))
+            if (target) {
+              editor.updateShape({
+                id: target.id,
+                type: target.type,
+                props: { ...target.props, ...data.props },
+              })
+            }
+          }
+
+          // Agent deletes shapes
+          if (data.type === 'canvas:delete_shapes' && data.shapeIds) {
+            const shapes = editor.getCurrentPageShapes()
+            const ids = shapes
+              .filter(sh => data.shapeIds.some((sid: string) => sh.id.includes(sid)))
+              .map(sh => sh.id)
+            if (ids.length > 0) editor.deleteShapes(ids)
+          }
+
+          // Agent moves viewport
+          if (data.type === 'canvas:move_viewport') {
+            const zoom = data.zoom ?? editor.getZoomLevel()
+            editor.setCamera({ x: -(data.x as number), y: -(data.y as number), z: zoom }, {
+              animation: { duration: 300 },
+            })
+          }
         } catch {}
       }
 

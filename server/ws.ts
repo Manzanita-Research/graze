@@ -3,7 +3,11 @@ import type { ServerWebSocket } from "bun";
 export type WsMessage =
   | { type: "message:created"; message: Record<string, unknown> }
   | { type: "shape:created"; message: Record<string, unknown> }
-  | { type: "snapshot:created"; timestamp: string };
+  | { type: "snapshot:created"; timestamp: string }
+  | { type: "canvas:create_shape"; shape: Record<string, unknown> }
+  | { type: "canvas:update_shape"; shapeId: string; props: Record<string, unknown> }
+  | { type: "canvas:delete_shapes"; shapeIds: string[] }
+  | { type: "canvas:move_viewport"; x: number; y: number; zoom?: number };
 
 const clients = new Set<ServerWebSocket<unknown>>();
 

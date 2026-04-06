@@ -144,6 +144,66 @@ async function handleRequest(req: Request): Promise<Response> {
     });
   }
 
+  // POST /api/canvas/create_shape — agent creates a shape on the canvas
+  if (path === "/api/canvas/create_shape" && req.method === "POST") {
+    const body = (await req.json()) as Record<string, unknown>;
+    broadcast({ type: "canvas:create_shape", shape: body });
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 201,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  // POST /api/canvas/update_shape — agent updates a shape
+  if (path === "/api/canvas/update_shape" && req.method === "POST") {
+    const body = (await req.json()) as { shapeId: string; props: Record<string, unknown> };
+    if (!body.shapeId) {
+      return new Response(JSON.stringify({ error: "shapeId required" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    broadcast({ type: "canvas:update_shape", shapeId: body.shapeId, props: body.props ?? {} });
+    return new Response(JSON.stringify({ ok: true }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  // POST /api/canvas/delete_shapes — agent deletes shapes
+  if (path === "/api/canvas/delete_shapes" && req.method === "POST") {
+    const body = (await req.json()) as { shapeIds: string[] };
+    if (!body.shapeIds?.length) {
+      return new Response(JSON.stringify({ error: "shapeIds required" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    broadcast({ type: "canvas:delete_shapes", shapeIds: body.shapeIds });
+    return new Response(JSON.stringify({ ok: true }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  // POST /api/canvas/move_viewport — agent moves the viewport
+  if (path === "/api/canvas/move_viewport" && req.method === "POST") {
+    const body = (await req.json()) as { x: number; y: number; zoom?: number };
+    broadcast({ type: "canvas:move_viewport", x: body.x, y: body.y, zoom: body.zoom });
+    return new Response(JSON.stringify({ ok: true }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  // GET /api/canvas/shapes — read all shapes as structured data
+  if (path === "/api/canvas/shapes" && req.method === "GET") {
+    // This is served by the frontend via snapshot — we broadcast a request
+    // and the frontend responds. For now, return a hint to use read_canvas.
+    return new Response(JSON.stringify({
+      hint: "Shape data is synced via Durable Objects. Use read_canvas for visual state, or the frontend will respond to shape queries.",
+    }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
   return new Response("Not found", { status: 404, headers: corsHeaders });
 }
 
