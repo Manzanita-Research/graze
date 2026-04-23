@@ -437,6 +437,57 @@ async function generateImage(
   }
 }
 
+/**
+ * Handle a `canvas:rasterize_request` from the Bun server: rasterize the
+ * requested tldraw shapes and POST the resulting PNG data URL back to
+ * /api/canvas/rasterize_response keyed by the supplied requestId.
+ *
+ * Non-existent shape ids are ignored silently on the frontend — the backend's
+ * timeout path surfaces a clean error to the agent if nothing renderable is
+ * found.
+ */
+async function rasterizeAndRespond(
+  editor: Editor,
+  requestId: string,
+  shapeIds: string[],
+): Promise<void> {
+  try {
+    const validIds = shapeIds
+      .map((raw) => {
+        const existing = editor.getCurrentPageShapes().find(
+          (sh) => sh.id === raw || sh.id.includes(raw),
+        );
+        return existing?.id;
+      })
+      .filter((id): id is TLShapeId => !!id);
+    if (validIds.length === 0) return;
+
+    const image = await editor.toImage(validIds, {
+      format: "png",
+      pixelRatio: 2,
+      background: true,
+      padding: 16,
+    });
+    if (!image) return;
+
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error ?? new Error("reader failed"));
+      reader.readAsDataURL(image.blob);
+    });
+
+    await fetch(`${API_URL}/api/canvas/rasterize_response`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requestId, dataUrl }),
+    });
+  } catch (err) {
+    // Don't crash the WS handler; the backend timeout will surface an error.
+    console.error("rasterize_request handler failed:", err);
+  }
+}
+
 /** Find the lowest point of all existing shapes to place new ones below */
 function getNextY(editor: Editor): number {
   const shapes = editor.getCurrentPageShapes();
@@ -1077,13 +1128,87 @@ function App() {
           // Agent creates an arbitrary shape
           if (data.type === "canvas:create_shape" && data.shape) {
             const s = data.shape;
+            // Server-emitted ids may be pre-prefixed ("shape:img-..."); only
+            // run them through createShapeId when the prefix is missing.
+            const rawId = typeof s.id === "string" ? s.id : undefined;
+            const shapeId = rawId
+              ? rawId.startsWith("shape:")
+                ? (rawId as TLShapeId)
+                : createShapeId(rawId)
+              : createShapeId();
+
+            // Special case: image shapes must go through the asset system so
+            // they round-trip through @tldraw/sync (same pattern as the
+            // canvas-UI feature).
+            if (s.type === "image") {
+              const props = (s.props as Record<string, unknown>) ?? {};
+              const url = typeof props.url === "string" ? props.url : undefined;
+              if (!url) return;
+              const w =
+                typeof props.w === "number"
+                  ? props.w
+                  : GENERATED_IMAGE_CANVAS;
+              const h =
+                typeof props.h === "number"
+                  ? props.h
+                  : GENERATED_IMAGE_CANVAS;
+              const nativeW =
+                typeof props.nativeW === "number"
+                  ? props.nativeW
+                  : GENERATED_IMAGE_NATIVE;
+              const nativeH =
+                typeof props.nativeH === "number"
+                  ? props.nativeH
+                  : GENERATED_IMAGE_NATIVE;
+
+              const assetId = AssetRecordType.createId();
+              editor.createAssets([
+                {
+                  id: assetId,
+                  type: "image",
+                  typeName: "asset",
+                  meta: {},
+                  props: {
+                    name: "generated.png",
+                    src: url,
+                    w: nativeW,
+                    h: nativeH,
+                    mimeType: "image/png",
+                    isAnimated: false,
+                  },
+                },
+              ]);
+              editor.createShape({
+                id: shapeId,
+                type: "image",
+                x: (s.x as number) ?? 0,
+                y: (s.y as number) ?? 0,
+                props: { assetId, w, h },
+              });
+              return;
+            }
+
             editor.createShape({
-              id: s.id ? createShapeId(s.id as string) : createShapeId(),
+              id: shapeId,
               type: ((s.type as string) ?? "geo") as "geo",
               x: (s.x as number) ?? 0,
               y: (s.y as number) ?? 0,
               props: (s.props as Record<string, unknown>) ?? {},
             } as any);
+          }
+
+          // Server wants the frontend to rasterize a selection and POST the
+          // resulting data URL back, correlated by requestId.
+          if (
+            data.type === "canvas:rasterize_request" &&
+            typeof data.requestId === "string" &&
+            Array.isArray(data.shapeIds)
+          ) {
+            void rasterizeAndRespond(
+              editor,
+              data.requestId as string,
+              data.shapeIds as string[],
+            );
           }
 
           // Agent updates a shape's props

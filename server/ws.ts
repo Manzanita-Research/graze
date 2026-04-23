@@ -7,7 +7,8 @@ export type WsMessage =
   | { type: "canvas:create_shape"; shape: Record<string, unknown> }
   | { type: "canvas:update_shape"; shapeId: string; props: Record<string, unknown> }
   | { type: "canvas:delete_shapes"; shapeIds: string[] }
-  | { type: "canvas:move_viewport"; x: number; y: number; zoom?: number };
+  | { type: "canvas:move_viewport"; x: number; y: number; zoom?: number }
+  | { type: "canvas:rasterize_request"; requestId: string; shapeIds: string[] };
 
 const clients = new Set<ServerWebSocket<unknown>>();
 

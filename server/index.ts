@@ -13,8 +13,27 @@
  */
 
 import { addClient, removeClient, broadcast } from "./ws";
+import { createCanvasImageHandlers } from "./canvasImage";
 
 const PORT = parseInt(process.env.GRAZE_PORT ?? "3737", 10);
+
+/**
+ * The Cloudflare worker serves /api/images/generate. In dev it runs in-process
+ * inside Vite on 5173 (via @cloudflare/vite-plugin); in prod it's served by
+ * the deployed worker. Override via GRAZE_WORKER_URL if needed.
+ */
+const WORKER_URL = process.env.GRAZE_WORKER_URL ?? "http://localhost:5173";
+
+const canvasImageHandlers = createCanvasImageHandlers({
+  broadcast,
+  fetchWorker: async (req) => {
+    const src = new URL(req.url);
+    const target = new URL(src.pathname + src.search, WORKER_URL);
+    // Rebuild the Request against the worker's URL so the body + headers are
+    // forwarded as-is. Using the Request copy ctor preserves multipart bodies.
+    return fetch(new Request(target.toString(), req));
+  },
+});
 
 // --- In-memory store ---
 
@@ -222,7 +241,35 @@ async function handleRequest(req: Request, server: any) {
     return listShapes();
   }
 
+  if (pathname === "/api/canvas/generate_image") {
+    if (method === "POST") {
+      return canvasImageHandlers.handleGenerateImage(req);
+    }
+    return methodNotAllowed(["POST"]);
+  }
+
+  if (pathname === "/api/canvas/rasterize_response") {
+    if (method === "POST") {
+      return canvasImageHandlers.handleRasterizeResponse(req);
+    }
+    return methodNotAllowed(["POST"]);
+  }
+
   return new Response("Not Found", { status: 404 });
+}
+
+function methodNotAllowed(allowed: string[]): Response {
+  return new Response(
+    JSON.stringify({ error: "method not allowed" }),
+    {
+      status: 405,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json",
+        Allow: allowed.join(", "),
+      },
+    },
+  );
 }
 
 // --- Start ---
