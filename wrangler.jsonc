@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "graze",
+  "main": "worker/worker.ts",
+  "compatibility_date": "2026-04-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "upload_source_maps": true,
+  "preview_urls": true,
+  "observability": {
+    "enabled": true,
+  },
+  // "assets": {
+  //   "not_found_handling": "single-page-application",
+  //   "directory": "./dist/client",
+  // },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TLSYNC_DURABLE_OBJECT",
+        "class_name": "TLSyncDurableObject",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["TLSyncDurableObject"],
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "TLDRAW_BUCKET",
+      "bucket_name": "graze",
+      "preview_bucket_name": "graze-preview",
+    },
+  ],
+}
