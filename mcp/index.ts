@@ -15,12 +15,9 @@
  *   read_messages  — read recent messages from the canvas
  */
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  ListToolsRequestSchema,
-  CallToolRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import * as z from "zod/v4";
 
 const BASE_URL = process.env.GRAZE_URL ?? "http://localhost:3737";
 
@@ -50,7 +47,11 @@ async function apiGet(path: string) {
 
 // --- Channel notification builder ---
 
-function buildChannelNotification(message: { id: string; text: string; timestamp: string }) {
+function buildChannelNotification(message: {
+  id: string;
+  text: string;
+  timestamp: string;
+}) {
   return {
     method: "notifications/claude/channel" as const,
     params: {
@@ -97,239 +98,219 @@ Keep canvas additions concise and well-positioned.`;
 
 // --- MCP Server ---
 
-const mcp = new Server(
+const mcp = new McpServer(
   { name: "graze", version: "0.3.0" },
   {
     capabilities: {
-      experimental: { "claude/channel": {} },
+      experimental: { "claude/channel": {}, "claude/channel/permission": {} },
       tools: {},
     },
     instructions: INSTRUCTIONS,
-  }
+  },
 );
 
 // --- Tools ---
 
-mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: "reply",
-      description:
-        "Send a quick text reply as a sticky note on the Graze canvas.",
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          text: {
-            type: "string",
-            description: "The message text to display",
-          },
-        },
-        required: ["text"],
-      },
+mcp.registerTool(
+  "reply",
+  {
+    description:
+      "Send a quick text reply as a sticky note on the Graze canvas.",
+    inputSchema: {
+      text: z.string().describe("The message text to display"),
     },
-    {
-      name: "create_shape",
-      description:
-        "Create a shape on the Graze canvas. Supports note (sticky note), text, geo (rectangle/ellipse), and arrow types.",
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          type: {
-            type: "string",
-            description: "Shape type: 'note', 'text', 'geo', or 'arrow'",
-            enum: ["note", "text", "geo", "arrow"],
-          },
-          x: {
-            type: "number",
-            description: "X position on canvas (default: 0)",
-          },
-          y: {
-            type: "number",
-            description: "Y position on canvas (default: 0)",
-          },
-          props: {
-            type: "object",
-            description: "Shape-specific properties. For note/text: { richText: string (will be converted), color: string, size: 's'|'m'|'l'|'xl' }. For geo: { w: number, h: number, geo: 'rectangle'|'ellipse'|'diamond', color: string, fill: 'none'|'semi'|'solid' }",
-          },
-          id: {
-            type: "string",
-            description: "Optional custom ID for the shape (for later updates/deletion)",
-          },
-        },
-        required: ["type"],
-      },
-    },
-    {
-      name: "update_shape",
-      description:
-        "Update an existing shape's properties on the canvas.",
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          shapeId: {
-            type: "string",
-            description: "The ID of the shape to update",
-          },
-          props: {
-            type: "object",
-            description: "Properties to update (merged with existing props)",
-          },
-        },
-        required: ["shapeId", "props"],
-      },
-    },
-    {
-      name: "delete_shapes",
-      description:
-        "Delete one or more shapes from the canvas.",
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          shapeIds: {
-            type: "array",
-            items: { type: "string" },
-            description: "Array of shape IDs to delete",
-          },
-        },
-        required: ["shapeIds"],
-      },
-    },
-    {
-      name: "move_viewport",
-      description:
-        "Move the canvas viewport to a specific position and/or zoom level.",
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          x: {
-            type: "number",
-            description: "X position to center on",
-          },
-          y: {
-            type: "number",
-            description: "Y position to center on",
-          },
-          zoom: {
-            type: "number",
-            description: "Zoom level (1 = 100%, 0.5 = 50%, 2 = 200%)",
-          },
-        },
-        required: ["x", "y"],
-      },
-    },
-    {
-      name: "read_messages",
-      description:
-        "Read recent messages from the Graze canvas.",
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          limit: {
-            type: "number",
-            description: "Number of recent messages to return (default 20)",
-          },
-        },
-      },
-    },
-    {
-      name: "read_canvas",
-      description:
-        "Get the latest canvas snapshot as a base64 PNG image. The human must press F12 or the snapshot button first.",
-      inputSchema: {
-        type: "object" as const,
-        properties: {},
-      },
-    },
-  ],
-}));
-
-mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
-  const { name, arguments: args } = req.params;
-  const a = (args ?? {}) as Record<string, unknown>;
-
-  if (name === "reply") {
-    const text = a.text as string;
+  },
+  async ({ text }) => {
     await apiPost("/api/shape", { from: "agent", text });
     return {
       content: [{ type: "text" as const, text: "Reply sent to Graze canvas." }],
     };
-  }
+  },
+);
 
-  if (name === "create_shape") {
+mcp.registerTool(
+  "create_shape",
+  {
+    description:
+      "Create a shape on the Graze canvas. Supports note (sticky note), text, geo (rectangle/ellipse), and arrow types.",
+    inputSchema: z.object({
+      type: z
+        .enum(["note", "text", "geo", "arrow"])
+        .describe("Shape type: 'note', 'text', 'geo', or 'arrow'"),
+      x: z.optional(z.number().describe("X position on canvas (default: 0)")),
+      y: z.optional(z.number().describe("Y position on canvas (default: 0)")),
+      props: z.optional(
+        z
+          .object()
+          .describe(
+            "Shape-specific properties. For note/text: { richText: string (will be converted), color: string, size: 's'|'m'|'l'|'xl' }. For geo: { w: number, h: number, geo: 'rectangle'|'ellipse'|'diamond', color: string, fill: 'none'|'semi'|'solid' }",
+          ),
+      ),
+      id: z.optional(
+        z
+          .string()
+          .describe(
+            "Optional custom ID for the shape (for later updates/deletion)",
+          ),
+      ),
+    }),
+  },
+  async ({ type, x, y, props, id }) => {
     await apiPost("/api/canvas/create_shape", {
-      type: a.type ?? "geo",
-      x: a.x ?? 0,
-      y: a.y ?? 0,
-      props: a.props ?? {},
-      id: a.id,
+      type: type ?? "geo",
+      x: x ?? 0,
+      y: y ?? 0,
+      props: props ?? {},
+      id: id,
     });
     return {
-      content: [{ type: "text" as const, text: `Created ${a.type ?? "geo"} shape on canvas.` }],
+      content: [
+        {
+          type: "text" as const,
+          text: `Created ${type ?? "geo"} shape on canvas.`,
+        },
+      ],
     };
-  }
+  },
+);
 
-  if (name === "update_shape") {
+mcp.registerTool(
+  "update_shape",
+  {
+    description: "Update an existing shape's properties on the canvas.",
+    inputSchema: z.object({
+      shapeId: z.string().describe("The ID of the shape to update"),
+      props: z
+        .object({})
+        .describe("Properties to update (merged with existing props)"),
+    }),
+  },
+  async ({ shapeId, props }) => {
     await apiPost("/api/canvas/update_shape", {
-      shapeId: a.shapeId,
-      props: a.props ?? {},
+      shapeId,
+      props: props ?? {},
     });
     return {
-      content: [{ type: "text" as const, text: `Updated shape ${a.shapeId}.` }],
+      content: [{ type: "text" as const, text: `Updated shape ${shapeId}.` }],
     };
-  }
+  },
+);
 
-  if (name === "delete_shapes") {
+mcp.registerTool(
+  "delete_shapes",
+  {
+    description: "Delete one or more shapes from the canvas.",
+    inputSchema: z.object({
+      shapeIds: z.array(z.string()).describe("Array of shape IDs to delete"),
+    }),
+  },
+  async ({ shapeIds }) => {
     await apiPost("/api/canvas/delete_shapes", {
-      shapeIds: a.shapeIds,
+      shapeIds,
     });
     return {
-      content: [{ type: "text" as const, text: `Deleted ${(a.shapeIds as string[]).length} shape(s).` }],
+      content: [
+        {
+          type: "text" as const,
+          text: `Deleted ${shapeIds.length} shape(s).`,
+        },
+      ],
     };
-  }
+  },
+);
 
-  if (name === "move_viewport") {
+mcp.registerTool(
+  "move_viewport",
+  {
+    description:
+      "Move the canvas viewport to a specific position and/or zoom level.",
+    inputSchema: z.object({
+      x: z.number().describe("X position to center on"),
+      y: z.number().describe("Y position to center on"),
+      zoom: z
+        .optional(z.number())
+        .describe("Zoom level (1 = 100%, 0.5 = 50%, 2 = 200%)"),
+    }),
+  },
+  async ({ x, y, zoom }) => {
     await apiPost("/api/canvas/move_viewport", {
-      x: a.x ?? 0,
-      y: a.y ?? 0,
-      zoom: a.zoom,
+      x: x ?? 0,
+      y: y ?? 0,
+      zoom,
     });
     return {
-      content: [{ type: "text" as const, text: `Moved viewport to (${a.x}, ${a.y}).` }],
+      content: [
+        { type: "text" as const, text: `Moved viewport to (${x}, ${y}).` },
+      ],
     };
-  }
+  },
+);
 
-  if (name === "read_messages") {
-    const limit = (a.limit as number) ?? 20;
-    const result = (await apiGet(`/api/messages?limit=${limit}`)) as {
-      messages: Array<{ id: string; from: string; text: string; timestamp: string }>;
+mcp.registerTool(
+  "read_messages",
+  {
+    description: "Read recent messages from the Graze canvas.",
+    inputSchema: z.object({
+      limit: z
+        .optional(z.number())
+        .describe("Number of recent messages to return (default 20)"),
+    }),
+  },
+  async ({ limit }) => {
+    const result = (await apiGet(`/api/messages?limit=${limit ?? 20}`)) as {
+      messages: Array<{
+        id: string;
+        from: string;
+        text: string;
+        timestamp: string;
+      }>;
     };
     if (result.messages.length === 0) {
       return { content: [{ type: "text" as const, text: "No messages yet." }] };
     }
-    const formatted = result.messages.map((m) => `[${m.from}] ${m.text}`).join("\n");
+    const formatted = result.messages
+      .map((m) => `[${m.from}] ${m.text}`)
+      .join("\n");
     return { content: [{ type: "text" as const, text: formatted }] };
-  }
+  },
+);
 
-  if (name === "read_canvas") {
+mcp.registerTool(
+  "read_canvas",
+  {
+    description:
+      "Get the latest canvas snapshot as a base64 PNG image. The human must press F12 or the snapshot button first.",
+    inputSchema: z.object({}),
+  },
+  async () => {
     const result = (await apiGet("/api/canvas/snapshot")) as {
       snapshot: { dataUrl: string; timestamp: string } | null;
     };
     if (!result.snapshot) {
       return {
-        content: [{ type: "text" as const, text: "No canvas snapshot available yet. Ask the human to press F12." }],
+        content: [
+          {
+            type: "text" as const,
+            text: "No canvas snapshot available yet. Ask the human to press F12.",
+          },
+        ],
       };
     }
-    const base64 = result.snapshot.dataUrl.replace(/^data:image\/png;base64,/, "");
+    const base64 = result.snapshot.dataUrl.replace(
+      /^data:image\/png;base64,/,
+      "",
+    );
     return {
       content: [
         { type: "image" as const, data: base64, mimeType: "image/png" },
-        { type: "text" as const, text: `Canvas snapshot from ${result.snapshot.timestamp}` },
+        {
+          type: "text" as const,
+          text: `Canvas snapshot from ${result.snapshot.timestamp}`,
+        },
       ],
     };
-  }
-
-  throw new Error(`Unknown tool: ${name}`);
-});
+  },
+);
 
 // --- WebSocket listener for human messages ---
 
@@ -350,13 +331,14 @@ function connectWebSocket() {
         try {
           const msg = JSON.parse(event.data as string);
           if (msg.type === "message:created" && msg.message?.from === "human") {
-            mcp.notification(buildChannelNotification(msg.message));
+            mcp.server.notification(buildChannelNotification(msg.message));
           }
           if (msg.type === "snapshot:created") {
-            mcp.notification({
+            mcp.server.notification({
               method: "notifications/claude/channel" as const,
               params: {
-                content: "The human sent a canvas snapshot. Use read_canvas to see it.",
+                content:
+                  "The human sent a canvas snapshot. Use read_canvas to see it.",
                 meta: { timestamp: msg.timestamp, type: "snapshot" },
               },
             });
@@ -367,7 +349,9 @@ function connectWebSocket() {
       };
 
       ws.onclose = () => {
-        console.error(`graze: WebSocket closed, reconnecting in ${reconnectDelay}ms`);
+        console.error(
+          `graze: WebSocket closed, reconnecting in ${reconnectDelay}ms`,
+        );
         setTimeout(connect, reconnectDelay);
         reconnectDelay = Math.min(reconnectDelay * 2, 30000);
       };
