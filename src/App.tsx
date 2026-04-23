@@ -6,6 +6,10 @@ import {
   DefaultHorizontalAlignStyle,
   createShapeId,
   Vec,
+  AssetRecordType,
+  renderPlaintextFromRichText,
+  type TLShape,
+  type TLShapeId,
 } from "tldraw";
 import { useSync } from "@tldraw/sync";
 import { toRichText } from "@tldraw/tlschema";
@@ -13,6 +17,10 @@ import "tldraw/tldraw.css";
 import "./App.css";
 import { getBookmarkPreview } from "./getBookmarkPreview";
 import { multiplayerAssetStore } from "./multiplayerAssetStore";
+import {
+  buildPromptFromSelection,
+  isTextOnlySelection,
+} from "./imagePromptComposition";
 
 const API_URL =
   import.meta.env.VITE_API_URL || "http://localhost:3737";
@@ -198,6 +206,237 @@ const TOOLS = [
   },
 ];
 
+/** Native image size returned by gpt-image-2 at 1024x1024. */
+const GENERATED_IMAGE_NATIVE = 1024;
+/** Canvas display size for both the placeholder and the final image shape. */
+const GENERATED_IMAGE_CANVAS = 384;
+
+const IMAGE_ICON = (
+  <svg
+    width="18"
+    height="18"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <circle cx="8.5" cy="9" r="1.5" />
+    <path d="M21 15l-4.5-4.5L7 20" />
+    <path d="M14 7l4 4" strokeDasharray="1 2" />
+  </svg>
+);
+
+/** Extract plain text from a text/note shape's richText, returning "" otherwise. */
+function getShapeText(editor: Editor, shape: TLShape): string {
+  if (shape.type !== "text" && shape.type !== "note") return "";
+  const richText = (shape.props as { richText?: unknown }).richText;
+  if (!richText) return "";
+  try {
+    return renderPlaintextFromRichText(
+      editor,
+      richText as Parameters<typeof renderPlaintextFromRichText>[1],
+    );
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Compute the target page-rect where the placeholder/final image shape should
+ * land. If a selection exists, place the shape just below it horizontally
+ * centered; otherwise fall back to `getNextY()`.
+ */
+function getImageDropPosition(editor: Editor): { x: number; y: number } {
+  const sel = editor.getSelectionPageBounds();
+  if (sel) {
+    return {
+      x: sel.midX - GENERATED_IMAGE_CANVAS / 2,
+      y: sel.maxY + 40,
+    };
+  }
+  return { x: 120, y: getNextY(editor) };
+}
+
+/** Create a placeholder geo shape so users see progress mid-flight. */
+function createPlaceholderShape(editor: Editor): TLShapeId {
+  const id = createShapeId();
+  const { x, y } = getImageDropPosition(editor);
+  editor.createShape({
+    id,
+    type: "geo",
+    x,
+    y,
+    props: {
+      geo: "rectangle",
+      dash: "dashed",
+      color: "grey",
+      fill: "none",
+      w: GENERATED_IMAGE_CANVAS,
+      h: GENERATED_IMAGE_CANVAS,
+      richText: toRichText("Generating image…"),
+    },
+  });
+  return id;
+}
+
+/** Remove a placeholder by id if it still exists. */
+function removePlaceholder(editor: Editor, id: TLShapeId) {
+  if (editor.getShape(id)) editor.deleteShapes([id]);
+}
+
+/**
+ * Create a real tldraw image shape referencing a registered asset at the
+ * position currently occupied by the placeholder (or fallback bounds).
+ * Must be called AFTER the placeholder has been deleted.
+ */
+function createImageShape(
+  editor: Editor,
+  url: string,
+  x: number,
+  y: number,
+): TLShapeId {
+  const assetId = AssetRecordType.createId();
+  editor.createAssets([
+    {
+      id: assetId,
+      type: "image",
+      typeName: "asset",
+      meta: {},
+      props: {
+        name: "generated.png",
+        src: url,
+        w: GENERATED_IMAGE_NATIVE,
+        h: GENERATED_IMAGE_NATIVE,
+        mimeType: "image/png",
+        isAnimated: false,
+      },
+    },
+  ]);
+  const shapeId = createShapeId();
+  editor.createShape({
+    id: shapeId,
+    type: "image",
+    x,
+    y,
+    props: {
+      assetId,
+      w: GENERATED_IMAGE_CANVAS,
+      h: GENERATED_IMAGE_CANVAS,
+    },
+  });
+  return shapeId;
+}
+
+type ImageGenerationOutcome =
+  | { kind: "ok"; shapeId: TLShapeId; url: string }
+  | { kind: "error"; message: string };
+
+interface GenerateImageOptions {
+  typedPrompt: string;
+  selectedIds: TLShapeId[];
+  signal?: AbortSignal;
+}
+
+/**
+ * Orchestrate a single image-generation round:
+ *   1. Classify the selection (text-only vs visual/mixed vs empty).
+ *   2. Create a placeholder shape.
+ *   3. POST to `/api/images/generate` (JSON or multipart).
+ *   4. On success, remove placeholder and create an image shape with a
+ *      registered asset so it round-trips through @tldraw/sync.
+ *   5. On error, remove placeholder and return a user-visible error message.
+ */
+async function generateImage(
+  editor: Editor,
+  opts: GenerateImageOptions,
+): Promise<ImageGenerationOutcome> {
+  const { typedPrompt, selectedIds, signal } = opts;
+  const selectedShapes = selectedIds
+    .map((id) => editor.getShape(id))
+    .filter((s): s is TLShape => s != null);
+
+  const hasSelection = selectedShapes.length > 0;
+  const textOnly = isTextOnlySelection(selectedShapes);
+  const isVisual = hasSelection && !textOnly;
+
+  // Reserve the target spot with a placeholder BEFORE doing async work so the
+  // drop position is captured while the source selection is still the basis.
+  const placeholderId = createPlaceholderShape(editor);
+  const placeholder = editor.getShape(placeholderId);
+  const targetX = placeholder?.x ?? 120;
+  const targetY = placeholder?.y ?? 100;
+
+  try {
+    let request: Request;
+    if (isVisual) {
+      // Rasterize the selection and POST multipart.
+      const image = await editor.toImage(selectedIds, {
+        format: "png",
+        pixelRatio: 2,
+        background: true,
+        padding: 16,
+      });
+      if (!image) throw new Error("Could not rasterize the selection");
+      const form = new FormData();
+      form.append("prompt", typedPrompt.trim());
+      form.append(
+        "image",
+        new File([image.blob], "selection.png", { type: "image/png" }),
+      );
+      request = new Request("/api/images/generate", {
+        method: "POST",
+        body: form,
+        signal,
+      });
+    } else {
+      const shapeTexts = hasSelection
+        ? selectedShapes.map((s) => getShapeText(editor, s))
+        : [];
+      const prompt = buildPromptFromSelection(typedPrompt, shapeTexts);
+      request = new Request("/api/images/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+        signal,
+      });
+    }
+
+    const res = await fetch(request);
+    if (!res.ok) {
+      let message = `Request failed with status ${res.status}`;
+      try {
+        const body = (await res.json()) as {
+          error?: { message?: string; status?: number };
+        };
+        if (body?.error?.message) {
+          message = body.error.message;
+        }
+      } catch {
+        // body wasn't JSON — use the generic message above
+      }
+      throw new Error(message);
+    }
+
+    const body = (await res.json()) as { url?: string };
+    const url = body?.url;
+    if (!url) throw new Error("Backend returned no image URL");
+
+    removePlaceholder(editor, placeholderId);
+    const shapeId = createImageShape(editor, url, targetX, targetY);
+    return { kind: "ok", shapeId, url };
+  } catch (err) {
+    removePlaceholder(editor, placeholderId);
+    const message =
+      err instanceof Error && err.message
+        ? err.message
+        : "Failed to generate image";
+    return { kind: "error", message };
+  }
+}
+
 /** Find the lowest point of all existing shapes to place new ones below */
 function getNextY(editor: Editor): number {
   const shapes = editor.getCurrentPageShapes();
@@ -327,9 +566,11 @@ function ZoomHelper() {
 function ToolDock({
   onClear,
   onSnapshot,
+  onImageClick,
 }: {
   onClear: () => void;
   onSnapshot: () => void;
+  onImageClick: () => void;
 }) {
   const editor = useEditor();
   const [currentTool, setCurrentTool] = useState("draw");
@@ -401,6 +642,14 @@ function ToolDock({
           {tool.icon}
         </button>
       ))}
+      <button
+        className="dock-btn dock-image-btn"
+        onClick={onImageClick}
+        title="Generate image"
+        aria-label="Generate image"
+      >
+        {IMAGE_ICON}
+      </button>
       <div className="dock-spacer" />
       <div className="dock-divider" />
       <button className="dock-btn" onClick={onClear} title="Clear canvas">
@@ -497,6 +746,276 @@ function MessageInput({ onSend }: { onSend: (text: string) => void }) {
       />
       <button type="submit">↑</button>
     </form>
+  );
+}
+
+export type PromptSubmitResult =
+  | { ok: true }
+  | { ok: false; hint: string };
+
+/**
+ * Shared prompt form for the image tool. Opens with focus in the input,
+ * closes cleanly on Escape or cancel (no network side effects), and delegates
+ * validation to the parent via `onSubmit`, which can return a hint to keep the
+ * form open when the typed prompt doesn't satisfy the current selection mode.
+ */
+function ImagePromptForm({
+  onSubmit,
+  onCancel,
+  placeholder,
+}: {
+  onSubmit: (typed: string) => Promise<PromptSubmitResult> | PromptSubmitResult;
+  onCancel: () => void;
+  placeholder: string;
+}) {
+  const [value, setValue] = useState("");
+  const [hint, setHint] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    // Focus the input when the form opens (VAL-CANVAS-002).
+    inputRef.current?.focus();
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await onSubmit(value);
+      if (result.ok === false) {
+        setHint(result.hint);
+        inputRef.current?.focus();
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      onCancel();
+    }
+  };
+
+  return (
+    <div className="graze-image-form-overlay" onMouseDown={onCancel}>
+      <form
+        className="graze-image-form"
+        onSubmit={handleSubmit}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <input
+          ref={inputRef}
+          type="text"
+          value={value}
+          onChange={(e) => {
+            setValue(e.target.value);
+            if (hint) setHint(null);
+          }}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          aria-label="Image prompt"
+        />
+        <div className="graze-image-form-actions">
+          <button
+            type="button"
+            className="graze-image-form-cancel"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button type="submit" className="graze-image-form-submit">
+            Generate
+          </button>
+        </div>
+        {hint && <div className="graze-image-form-hint">{hint}</div>}
+      </form>
+    </div>
+  );
+}
+
+/**
+ * Floating action anchored to the current selection bounds. Visible only
+ * when >=2 shapes are selected. Follows the selection as the camera pans/zooms.
+ */
+function FloatingGenerateAction({
+  onClick,
+  hidden,
+}: {
+  onClick: () => void;
+  hidden: boolean;
+}) {
+  const editor = useEditor();
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    const update = () => {
+      const ids = editor.getSelectedShapeIds();
+      if (ids.length < 2) {
+        setPos(null);
+        return;
+      }
+      const bounds = editor.getSelectionPageBounds();
+      if (!bounds) {
+        setPos(null);
+        return;
+      }
+      // Screen-space position: center of top edge of selection, nudged up.
+      const topCenterPage = new Vec(bounds.midX, bounds.minY);
+      const screen = editor.pageToScreen(topCenterPage);
+      setPos({ x: screen.x, y: screen.y });
+    };
+    update();
+    const interval = setInterval(update, 100);
+    return () => clearInterval(interval);
+  }, [editor]);
+
+  if (hidden || !pos) return null;
+
+  return (
+    <button
+      type="button"
+      className="graze-float-generate"
+      style={{ left: `${pos.x}px`, top: `${pos.y - 44}px` }}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={onClick}
+      title="Generate image from selection"
+    >
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <rect x="3" y="3" width="18" height="18" rx="2" />
+        <circle cx="8.5" cy="9" r="1.5" />
+        <path d="M21 15l-4.5-4.5L7 20" />
+      </svg>
+      <span>Generate image</span>
+    </button>
+  );
+}
+
+/** Minimal toast for user-visible errors. Auto-hides after a few seconds. */
+function Toast({
+  message,
+  onClose,
+}: {
+  message: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 6000);
+    return () => clearTimeout(t);
+  }, [onClose]);
+  return (
+    <div className="graze-toast" role="alert">
+      <span>{message}</span>
+      <button
+        type="button"
+        className="graze-toast-close"
+        onClick={onClose}
+        aria-label="Dismiss"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Owns image-generation form state + toast. Renders the floating generate
+ * action, the prompt form, and the toast inside the Tldraw context so
+ * `useEditor` works. The dock button triggers `onRequestOpen` on the parent.
+ */
+function CanvasImageTool({
+  formOpen,
+  onRequestOpen,
+  onClose,
+}: {
+  formOpen: boolean;
+  onRequestOpen: () => void;
+  onClose: () => void;
+}) {
+  const editor = useEditor();
+  const [toast, setToast] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Classify the current selection on each call — the parent re-mounts the
+  // form by toggling `formOpen`, and submits are validated against live state.
+  const classifySelection = useCallback(() => {
+    const selectedIds = [...editor.getSelectedShapeIds()];
+    const shapes = selectedIds
+      .map((id) => editor.getShape(id))
+      .filter((s): s is TLShape => s != null);
+    const textOnly = isTextOnlySelection(shapes);
+    const isVisual = shapes.length > 0 && !textOnly;
+    return { selectedIds, shapes, isVisual };
+  }, [editor]);
+
+  const handleCancel = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    onClose();
+  }, [onClose]);
+
+  const handleSubmit = useCallback(
+    async (typed: string): Promise<PromptSubmitResult> => {
+      const { selectedIds, isVisual } = classifySelection();
+      if (isVisual && !typed.trim()) {
+        return {
+          ok: false,
+          hint: "Type a prompt to guide the image generated from your selection.",
+        };
+      }
+
+      onClose();
+
+      const abort = new AbortController();
+      abortRef.current = abort;
+
+      const outcome = await generateImage(editor, {
+        typedPrompt: typed,
+        selectedIds,
+        signal: abort.signal,
+      });
+      if (abortRef.current === abort) abortRef.current = null;
+      if (outcome.kind === "error") {
+        setToast(outcome.message);
+      }
+      return { ok: true };
+    },
+    [editor, onClose, classifySelection],
+  );
+
+  // Only used to choose the placeholder copy in the form when it opens. Safe
+  // to call during render — classifySelection reads from the reactive editor
+  // store directly rather than from React state.
+  const placeholder = formOpen
+    ? classifySelection().isVisual
+      ? "Describe how to transform the selection…"
+      : "Describe the image to generate…"
+    : "";
+
+  return (
+    <>
+      <FloatingGenerateAction onClick={onRequestOpen} hidden={formOpen} />
+      {formOpen && (
+        <ImagePromptForm
+          onSubmit={handleSubmit}
+          onCancel={handleCancel}
+          placeholder={placeholder}
+        />
+      )}
+      {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+    </>
   );
 }
 
@@ -626,6 +1145,8 @@ function App() {
 
   const handleMount = useCallback((editor: Editor) => {
     editorRef.current = editor;
+    // Expose the editor on window for manual + agent-browser inspection.
+    (window as unknown as { editor?: Editor }).editor = editor;
     editor.updateInstanceState({ isGridMode: true, isPenMode: false });
     editor.setCurrentTool("draw");
     editor.setStyleForNextShapes(DefaultHorizontalAlignStyle, "middle");
@@ -704,6 +1225,10 @@ function App() {
     editor.deleteShapes([...shapeIds]);
   }, []);
 
+  const [imageFormOpen, setImageFormOpen] = useState(false);
+  const openImageForm = useCallback(() => setImageFormOpen(true), []);
+  const closeImageForm = useCallback(() => setImageFormOpen(false), []);
+
   return (
     <div className="graze">
       <div className="canvas">
@@ -724,7 +1249,16 @@ function App() {
           }}
         >
           <ZoomHelper />
-          <ToolDock onClear={handleClear} onSnapshot={handleSnapshot} />
+          <ToolDock
+            onClear={handleClear}
+            onSnapshot={handleSnapshot}
+            onImageClick={openImageForm}
+          />
+          <CanvasImageTool
+            formOpen={imageFormOpen}
+            onRequestOpen={openImageForm}
+            onClose={closeImageForm}
+          />
         </Tldraw>
       </div>
       <MessageInput onSend={handleSendMessage} />
