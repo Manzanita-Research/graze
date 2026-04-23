@@ -166,58 +166,72 @@ function listShapes() {
   });
 }
 
+// --- Main fetch handler ---
+
+async function handleRequest(req: Request, server: any) {
+  const url = new URL(req.url);
+  const pathname = url.pathname;
+  const method = req.method;
+
+  // WebSocket upgrade
+  if (pathname === "/ws") {
+    const success = server.upgrade(req);
+    if (success) return undefined as any;
+    return new Response("WebSocket upgrade failed", { status: 500 });
+  }
+
+  // CORS preflight
+  if (method === "OPTIONS" && pathname.startsWith("/api/")) {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
+  if (pathname === "/api/shape" && method === "POST") {
+    return createShape(req);
+  }
+
+  if (pathname === "/api/message" && method === "POST") {
+    return createMessage(req);
+  }
+
+  if (pathname === "/api/messages" && method === "GET") {
+    return listMessages(req);
+  }
+
+  if (pathname === "/api/canvas/snapshot") {
+    if (method === "POST") return postSnapshot(req);
+    if (method === "GET") return getSnapshot();
+  }
+
+  if (pathname === "/api/canvas/create_shape" && method === "POST") {
+    return createCanvasShape(req);
+  }
+
+  if (pathname === "/api/canvas/update_shape" && method === "POST") {
+    return updateCanvasShape(req);
+  }
+
+  if (pathname === "/api/canvas/delete_shapes" && method === "POST") {
+    return deleteCanvasShapes(req);
+  }
+
+  if (pathname === "/api/canvas/move_viewport" && method === "POST") {
+    return moveViewport(req);
+  }
+
+  if (pathname === "/api/canvas/shapes" && method === "GET") {
+    return listShapes();
+  }
+
+  return new Response("Not Found", { status: 404 });
+}
+
 // --- Start ---
 
 Bun.serve({
   hostname: "0.0.0.0",
   port: PORT,
-  routes: {
-    "/ws": (req, server) => {
-      if (server.upgrade(req)) return;
-      return new Response("WebSocket upgrade failed", { status: 400 });
-    },
-
-    "/api/shape": {
-      POST: createShape,
-    },
-
-    "/api/message": {
-      POST: createMessage,
-    },
-
-    "/api/messages": {
-      GET: listMessages,
-    },
-
-    "/api/canvas/snapshot": {
-      POST: postSnapshot,
-      GET: getSnapshot,
-    },
-
-    "/api/canvas/create_shape": {
-      POST: createCanvasShape,
-    },
-
-    "/api/canvas/update_shape": {
-      POST: updateCanvasShape,
-    },
-
-    "/api/canvas/delete_shapes": {
-      POST: deleteCanvasShapes,
-    },
-
-    "/api/canvas/move_viewport": {
-      POST: moveViewport,
-    },
-
-    "/api/canvas/shapes": {
-      GET: listShapes,
-    },
-
-    // CORS preflight for all API routes
-    "/api/*": {
-      OPTIONS: () => new Response(null, { status: 204, headers: corsHeaders }),
-    },
+  async fetch(req, server) {
+    return handleRequest(req, server);
   },
   websocket: {
     open(ws) {

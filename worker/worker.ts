@@ -21,9 +21,12 @@ const router = AutoRouter<
       body: request.body,
     });
   })
+
   .post("/api/uploads/:uploadId", handleAssetUpload)
   .get("/api/uploads/:uploadId", handleAssetDownload)
+
   .get("/api/unfurl", handleUnfurlRequest)
+
   .all("*", () => new Response("Not found", { status: 404 }));
 
 export default { fetch: router.fetch };

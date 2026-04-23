@@ -4,12 +4,26 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [cloudflare(), react()],
-  server: {
-    host: "0.0.0.0",
-    allowedHosts: true,
+  resolve: {
+    dedupe: [
+      "tldraw",
+      "@tldraw/sync",
+      "@tldraw/sync-core",
+      "@tldraw/editor",
+      "@tldraw/store",
+      "@tldraw/tlschema",
+      "@tldraw/validate",
+      "@tldraw/state",
+      "@tldraw/state-react",
+      "@tldraw/utils",
+    ],
   },
-  preview: {
-    host: "0.0.0.0",
-    allowedHosts: true,
-  },
+  // server: {
+  //   host: "0.0.0.0",
+  //   allowedHosts: true,
+  // },
+  // preview: {
+  //   host: "0.0.0.0",
+  //   allowedHosts: true,
+  // },
 });

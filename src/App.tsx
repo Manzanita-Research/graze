@@ -6,28 +6,20 @@ import {
   DefaultHorizontalAlignStyle,
   createShapeId,
   Vec,
-  type TLAssetStore,
 } from "tldraw";
 import { useSync } from "@tldraw/sync";
 import { toRichText } from "@tldraw/tlschema";
 import "tldraw/tldraw.css";
 import "./App.css";
+import { getBookmarkPreview } from "./getBookmarkPreview";
+import { multiplayerAssetStore } from "./multiplayerAssetStore";
 
 const API_URL =
-  import.meta.env.VITE_API_URL || `http://${window.location.hostname}:3737`;
-const WS_URL = API_URL.replace(/^http/, "ws");
-const SYNC_URL = `wss://${window.location.hostname}:8788`;
-const ROOM_ID = "graze-main";
+  import.meta.env.VITE_API_URL || "http://localhost:3737";
+const WS_URL = new URL("/ws", API_URL.replace(/^http/, "ws")).toString();
+const SYNC_URL = `ws://${window.location.host}`;
 
-// Minimal asset store — no upload support for now
-const assetStore: TLAssetStore = {
-  async upload() {
-    throw new Error("Asset uploads not supported yet");
-  },
-  resolve(asset) {
-    return asset.props.src ?? null;
-  },
-};
+const ROOM_ID = "graze-main";
 
 const TOOLS = [
   {
@@ -515,7 +507,7 @@ function App() {
   // Sync store via Cloudflare Durable Objects
   const store = useSync({
     uri: `${SYNC_URL}/api/connect/${ROOM_ID}`,
-    assets: assetStore,
+    assets: multiplayerAssetStore,
   });
 
   // F12 keybinding for snapshot
@@ -634,9 +626,11 @@ function App() {
 
   const handleMount = useCallback((editor: Editor) => {
     editorRef.current = editor;
-    editor.updateInstanceState({ isGridMode: true, isPenMode: true });
+    editor.updateInstanceState({ isGridMode: true, isPenMode: false });
     editor.setCurrentTool("draw");
     editor.setStyleForNextShapes(DefaultHorizontalAlignStyle, "middle");
+
+    editor.registerExternalAssetHandler("url", getBookmarkPreview);
 
     editor.sideEffects.registerAfterChangeHandler("shape", (prev, next) => {
       if (
