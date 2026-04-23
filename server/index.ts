@@ -9,7 +9,7 @@
  *   POST /api/canvas/snapshot    — UI posts a canvas snapshot (PNG base64)
  *   GET  /api/canvas/snapshot    — agent reads latest canvas snapshot
  *
- * WebSocket: upgrade on any request with Upgrade: websocket
+ * WebSocket: /ws
  */
 
 import { addClient, removeClient, broadcast } from "./ws";
@@ -32,179 +32,138 @@ function newId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-// --- HTTP handler ---
+// --- Response helpers ---
 
-async function handleRequest(req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const path = url.pathname;
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
 
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+// --- Route handlers ---
+
+async function createShape(req: Request) {
+  const body = (await req.json()) as { from?: string; text?: string };
+  const from = body.from === "agent" ? "agent" : "human";
+  const text = (body.text ?? "").trim();
+  if (!text) return json({ error: "text required" }, 400);
+
+  const msg: Message = {
+    id: newId(),
+    from,
+    text,
+    timestamp: new Date().toISOString(),
   };
+  messages.push(msg);
+  if (messages.length > 200) messages.splice(0, messages.length - 200);
 
-  if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsHeaders });
-  }
+  broadcast({
+    type: "shape:created",
+    message: msg as unknown as Record<string, unknown>,
+  });
 
-  // POST /api/shape — create a shape on the canvas (from agent reply tool)
-  if (path === "/api/shape" && req.method === "POST") {
-    const body = (await req.json()) as { from?: string; text?: string };
-    const from = body.from === "agent" ? "agent" : "human";
-    const text = (body.text ?? "").trim();
-    if (!text) {
-      return new Response(JSON.stringify({ error: "text required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+  return json(msg, 201);
+}
 
-    const msg: Message = {
-      id: newId(),
-      from: from as "human" | "agent",
-      text,
-      timestamp: new Date().toISOString(),
-    };
-    messages.push(msg);
-    if (messages.length > 200) messages.splice(0, messages.length - 200);
+async function createMessage(req: Request) {
+  const body = (await req.json()) as { from?: string; text?: string };
+  const from = body.from === "agent" ? "agent" : "human";
+  const text = (body.text ?? "").trim();
+  if (!text) return json({ error: "text required" }, 400);
 
-    // Broadcast as shape event — frontend will create a tldraw shape
-    broadcast({ type: "shape:created", message: msg as unknown as Record<string, unknown> });
+  const msg: Message = {
+    id: newId(),
+    from,
+    text,
+    timestamp: new Date().toISOString(),
+  };
+  messages.push(msg);
+  if (messages.length > 200) messages.splice(0, messages.length - 200);
 
-    return new Response(JSON.stringify(msg), {
-      status: 201,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+  broadcast({
+    type: "message:created",
+    message: msg as unknown as Record<string, unknown>,
+  });
 
-  // POST /api/message — create a message (backwards compat + human input)
-  if (path === "/api/message" && req.method === "POST") {
-    const body = (await req.json()) as { from?: string; text?: string };
-    const from = body.from === "agent" ? "agent" : "human";
-    const text = (body.text ?? "").trim();
-    if (!text) {
-      return new Response(JSON.stringify({ error: "text required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+  return json(msg, 201);
+}
 
-    const msg: Message = {
-      id: newId(),
-      from: from as "human" | "agent",
-      text,
-      timestamp: new Date().toISOString(),
-    };
-    messages.push(msg);
-    if (messages.length > 200) messages.splice(0, messages.length - 200);
+function listMessages(req: Request) {
+  const url = new URL(req.url);
+  const limit = parseInt(url.searchParams.get("limit") ?? "50", 10);
+  return json({ messages: messages.slice(-limit) });
+}
 
-    broadcast({ type: "message:created", message: msg as unknown as Record<string, unknown> });
+async function postSnapshot(req: Request) {
+  const body = (await req.json()) as { dataUrl?: string };
+  if (!body.dataUrl) return json({ error: "dataUrl required" }, 400);
 
-    return new Response(JSON.stringify(msg), {
-      status: 201,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+  canvasSnapshot = {
+    dataUrl: body.dataUrl,
+    timestamp: new Date().toISOString(),
+  };
+  broadcast({
+    type: "snapshot:created",
+    timestamp: canvasSnapshot.timestamp,
+  });
+  return json({ ok: true, timestamp: canvasSnapshot.timestamp });
+}
 
-  // GET /api/messages
-  if (path === "/api/messages" && req.method === "GET") {
-    const limit = parseInt(url.searchParams.get("limit") ?? "50", 10);
-    const recent = messages.slice(-limit);
-    return new Response(JSON.stringify({ messages: recent }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+function getSnapshot() {
+  return json({ snapshot: canvasSnapshot });
+}
 
-  // POST /api/canvas/snapshot
-  if (path === "/api/canvas/snapshot" && req.method === "POST") {
-    const body = (await req.json()) as { dataUrl?: string };
-    if (!body.dataUrl) {
-      return new Response(JSON.stringify({ error: "dataUrl required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-    canvasSnapshot = { dataUrl: body.dataUrl, timestamp: new Date().toISOString() };
-    broadcast({ type: "snapshot:created", timestamp: canvasSnapshot.timestamp });
-    return new Response(JSON.stringify({ ok: true, timestamp: canvasSnapshot.timestamp }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+async function createCanvasShape(req: Request) {
+  const body = (await req.json()) as Record<string, unknown>;
+  broadcast({ type: "canvas:create_shape", shape: body });
+  return json({ ok: true }, 201);
+}
 
-  // GET /api/canvas/snapshot
-  if (path === "/api/canvas/snapshot" && req.method === "GET") {
-    if (!canvasSnapshot) {
-      return new Response(JSON.stringify({ snapshot: null }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-    return new Response(JSON.stringify({ snapshot: canvasSnapshot }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+async function updateCanvasShape(req: Request) {
+  const body = (await req.json()) as {
+    shapeId: string;
+    props: Record<string, unknown>;
+  };
+  if (!body.shapeId) return json({ error: "shapeId required" }, 400);
 
-  // POST /api/canvas/create_shape — agent creates a shape on the canvas
-  if (path === "/api/canvas/create_shape" && req.method === "POST") {
-    const body = (await req.json()) as Record<string, unknown>;
-    broadcast({ type: "canvas:create_shape", shape: body });
-    return new Response(JSON.stringify({ ok: true }), {
-      status: 201,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+  broadcast({
+    type: "canvas:update_shape",
+    shapeId: body.shapeId,
+    props: body.props ?? {},
+  });
+  return json({ ok: true });
+}
 
-  // POST /api/canvas/update_shape — agent updates a shape
-  if (path === "/api/canvas/update_shape" && req.method === "POST") {
-    const body = (await req.json()) as { shapeId: string; props: Record<string, unknown> };
-    if (!body.shapeId) {
-      return new Response(JSON.stringify({ error: "shapeId required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-    broadcast({ type: "canvas:update_shape", shapeId: body.shapeId, props: body.props ?? {} });
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+async function deleteCanvasShapes(req: Request) {
+  const body = (await req.json()) as { shapeIds: string[] };
+  if (!body.shapeIds?.length) return json({ error: "shapeIds required" }, 400);
 
-  // POST /api/canvas/delete_shapes — agent deletes shapes
-  if (path === "/api/canvas/delete_shapes" && req.method === "POST") {
-    const body = (await req.json()) as { shapeIds: string[] };
-    if (!body.shapeIds?.length) {
-      return new Response(JSON.stringify({ error: "shapeIds required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-    broadcast({ type: "canvas:delete_shapes", shapeIds: body.shapeIds });
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+  broadcast({ type: "canvas:delete_shapes", shapeIds: body.shapeIds });
+  return json({ ok: true });
+}
 
-  // POST /api/canvas/move_viewport — agent moves the viewport
-  if (path === "/api/canvas/move_viewport" && req.method === "POST") {
-    const body = (await req.json()) as { x: number; y: number; zoom?: number };
-    broadcast({ type: "canvas:move_viewport", x: body.x, y: body.y, zoom: body.zoom });
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+async function moveViewport(req: Request) {
+  const body = (await req.json()) as { x: number; y: number; zoom?: number };
+  broadcast({
+    type: "canvas:move_viewport",
+    x: body.x,
+    y: body.y,
+    zoom: body.zoom,
+  });
+  return json({ ok: true });
+}
 
-  // GET /api/canvas/shapes — read all shapes as structured data
-  if (path === "/api/canvas/shapes" && req.method === "GET") {
-    // This is served by the frontend via snapshot — we broadcast a request
-    // and the frontend responds. For now, return a hint to use read_canvas.
-    return new Response(JSON.stringify({
-      hint: "Shape data is synced via Durable Objects. Use read_canvas for visual state, or the frontend will respond to shape queries.",
-    }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-
-  return new Response("Not found", { status: 404, headers: corsHeaders });
+function listShapes() {
+  return json({
+    hint: "Shape data is synced via Durable Objects. Use read_canvas for visual state, or the frontend will respond to shape queries.",
+  });
 }
 
 // --- Start ---
@@ -212,12 +171,53 @@ async function handleRequest(req: Request): Promise<Response> {
 Bun.serve({
   hostname: "0.0.0.0",
   port: PORT,
-  fetch(req, server) {
-    if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
-      server.upgrade(req);
-      return;
-    }
-    return handleRequest(req);
+  routes: {
+    "/ws": (req, server) => {
+      if (server.upgrade(req)) return;
+      return new Response("WebSocket upgrade failed", { status: 400 });
+    },
+
+    "/api/shape": {
+      POST: createShape,
+    },
+
+    "/api/message": {
+      POST: createMessage,
+    },
+
+    "/api/messages": {
+      GET: listMessages,
+    },
+
+    "/api/canvas/snapshot": {
+      POST: postSnapshot,
+      GET: getSnapshot,
+    },
+
+    "/api/canvas/create_shape": {
+      POST: createCanvasShape,
+    },
+
+    "/api/canvas/update_shape": {
+      POST: updateCanvasShape,
+    },
+
+    "/api/canvas/delete_shapes": {
+      POST: deleteCanvasShapes,
+    },
+
+    "/api/canvas/move_viewport": {
+      POST: moveViewport,
+    },
+
+    "/api/canvas/shapes": {
+      GET: listShapes,
+    },
+
+    // CORS preflight for all API routes
+    "/api/*": {
+      OPTIONS: () => new Response(null, { status: 204, headers: corsHeaders }),
+    },
   },
   websocket: {
     open(ws) {
