@@ -1,6 +1,7 @@
 import { handleUnfurlRequest } from "cloudflare-workers-unfurl";
 import { AutoRouter, error, type IRequest } from "itty-router";
 import { handleAssetDownload, handleAssetUpload } from "./assetUploads";
+import { handleImageGeneration } from "./images";
 export { TLSyncDurableObject } from "./TLSyncDurableObject";
 
 const router = AutoRouter<
@@ -26,6 +27,8 @@ const router = AutoRouter<
   .get("/api/uploads/:uploadId", handleAssetDownload)
 
   .get("/api/unfurl", handleUnfurlRequest)
+
+  .post("/api/images/generate", handleImageGeneration)
 
   .all("*", () => new Response("Not found", { status: 404 }));
 
