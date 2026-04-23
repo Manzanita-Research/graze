@@ -1,70 +1,87 @@
 import { error, type IRequest } from "itty-router";
-import OpenAI from "openai";
+import Replicate from "replicate";
 import { uniqueId } from "./utils";
 
-// Server-enforced gpt-image-2 contract.
-// Any client attempt to override these is silently discarded.
-const MODEL = "gpt-image-2";
-const QUALITY = "low";
-const SIZE = "1024x1024";
-const N = 1;
+// Server-enforced gpt-image-2 contract on Replicate.
+// Any client attempt to override any of these (or the model slug) is silently discarded.
+const MODEL = "openai/gpt-image-2" as const;
+const QUALITY = "low" as const;
+const ASPECT_RATIO = "1:1" as const;
+const OUTPUT_FORMAT = "png" as const;
+const NUMBER_OF_IMAGES = 1 as const;
 
-interface OpenAIImagesResponse {
-  data?: Array<{ b64_json?: string }>;
+interface ReplicateInput {
+  prompt: string;
+  quality: typeof QUALITY;
+  aspect_ratio: typeof ASPECT_RATIO;
+  output_format: typeof OUTPUT_FORMAT;
+  number_of_images: typeof NUMBER_OF_IMAGES;
+  input_images?: string[];
 }
 
 /**
- * Minimal surface of the OpenAI client we actually use. Defined here so that
- * tests can inject a fake client via `__setOpenAIClientFactory` without
- * pulling the full `OpenAI` type in.
+ * Minimal surface of the Replicate client we actually use. Defined here so
+ * tests can inject a fake via `__setReplicateClientFactory` without pulling
+ * the full `Replicate` type in.
  */
-interface OpenAILike {
-  images: {
-    generate(body: {
-      model: string;
-      prompt: string;
-      quality: string;
-      size: string;
-      n: number;
-    }): Promise<OpenAIImagesResponse>;
-    edit(body: {
-      model: string;
-      prompt: string;
-      image: File[];
-      quality: string;
-      size: string;
-      n: number;
-    }): Promise<OpenAIImagesResponse>;
-  };
+interface ReplicateLike {
+  run(
+    model: `${string}/${string}` | `${string}/${string}:${string}`,
+    options: { input: ReplicateInput },
+  ): Promise<unknown>;
 }
 
-type ClientFactory = (apiKey: string) => OpenAILike;
+type ClientFactory = (apiToken: string) => ReplicateLike;
+type Fetcher = (url: string | URL) => Promise<Response>;
 
-const defaultClientFactory: ClientFactory = (apiKey) =>
-  new OpenAI({ apiKey }) as unknown as OpenAILike;
+const defaultClientFactory: ClientFactory = (auth) =>
+  new Replicate({ auth }) as unknown as ReplicateLike;
+
+const defaultFetcher: Fetcher = (url) =>
+  fetch(typeof url === "string" ? url : url.toString());
 
 let clientFactory: ClientFactory = defaultClientFactory;
+let outputFetcher: Fetcher = defaultFetcher;
 
-/** Test-only: override the OpenAI client factory for module-boundary mocking. */
-export function __setOpenAIClientFactory(factory: ClientFactory) {
+/** Test-only: override the Replicate client factory for module-boundary mocking. */
+export function __setReplicateClientFactory(factory: ClientFactory) {
   clientFactory = factory;
 }
 
-/** Test-only: restore the real OpenAI client factory. */
-export function __resetOpenAIClientFactory() {
+/** Test-only: restore the real Replicate client factory. */
+export function __resetReplicateClientFactory() {
   clientFactory = defaultClientFactory;
+}
+
+/** Test-only: override the fetcher used to download the Replicate output URI. */
+export function __setReplicateOutputFetcher(fetcher: Fetcher) {
+  outputFetcher = fetcher;
+}
+
+/** Test-only: restore the real output fetcher. */
+export function __resetReplicateOutputFetcher() {
+  outputFetcher = defaultFetcher;
 }
 
 /**
  * POST /api/images/generate
  *
- * - `application/json` body `{ prompt }`            → openai.images.generate
- * - `multipart/form-data` with `prompt` + `image`   → openai.images.edit (image[])
+ * - `application/json` body `{ prompt }`
+ * - `multipart/form-data` with `prompt` + `image` file(s) — reference images
+ *   are converted to `data:image/png;base64,...` URLs and passed in
+ *   `input.input_images`.
  *
- * Server pins model/quality/size/n. Silently discards any client overrides.
- * Decodes the returned b64_json, persists PNG bytes to R2 under `uploads/<id>`,
- * and responds with `{ url: "/api/uploads/<id>" }` (relative — never a base64
- * payload and never an openai.com URL).
+ * Both paths are a single Replicate call:
+ *   replicate.run("openai/gpt-image-2", { input })
+ *
+ * Server pins the model slug plus `quality`/`aspect_ratio`/`output_format`/
+ * `number_of_images`. Client overrides for any of those (or `model`) are
+ * silently discarded. `openai_api_key`, `user_id`, `background`, `moderation`,
+ * and `output_compression` are NEVER forwarded — Replicate's defaults apply.
+ *
+ * The worker fetches the returned Replicate output URI, persists the PNG
+ * bytes to R2 under `uploads/<id>`, and responds with
+ * `{ url: "/api/uploads/<id>" }` (relative — never a Replicate URL).
  */
 export async function handleImageGeneration(
   request: IRequest,
@@ -107,47 +124,67 @@ export async function handleImageGeneration(
     return error(400, "prompt is required");
   }
 
-  const apiKey = env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return error(500, "OPENAI_API_KEY not configured");
+  const apiToken = env.REPLICATE_API_TOKEN;
+  if (!apiToken) {
+    return error(500, "REPLICATE_API_TOKEN not configured");
   }
 
-  const client = clientFactory(apiKey);
+  const input: ReplicateInput = {
+    prompt,
+    quality: QUALITY,
+    aspect_ratio: ASPECT_RATIO,
+    output_format: OUTPUT_FORMAT,
+    number_of_images: NUMBER_OF_IMAGES,
+  };
 
-  let res: OpenAIImagesResponse;
-  try {
-    if (images.length > 0) {
-      res = await client.images.edit({
-        model: MODEL,
-        prompt,
-        image: images,
-        quality: QUALITY,
-        size: SIZE,
-        n: N,
-      });
-    } else {
-      res = await client.images.generate({
-        model: MODEL,
-        prompt,
-        quality: QUALITY,
-        size: SIZE,
-        n: N,
-      });
+  if (images.length > 0) {
+    const inputImages: string[] = [];
+    for (const file of images) {
+      const buf = await file.arrayBuffer();
+      const b64 = bytesToBase64(new Uint8Array(buf));
+      inputImages.push(`data:image/png;base64,${b64}`);
     }
+    input.input_images = inputImages;
+  }
+
+  const client = clientFactory(apiToken);
+
+  let output: unknown;
+  try {
+    output = await client.run(MODEL, { input });
   } catch (err) {
     const { status, message } = extractUpstreamError(err);
     return jsonResponse({ error: { status, message } }, 502);
   }
 
-  const b64 = res?.data?.[0]?.b64_json;
-  if (!b64) {
+  const outputUri = resolveFirstOutputUri(output);
+  if (!outputUri) {
     return jsonResponse(
-      { error: { status: 502, message: "OpenAI returned no image data" } },
+      { error: { status: 502, message: "Replicate returned no output URIs" } },
       502,
     );
   }
 
-  const bytes = decodeBase64(b64);
+  let bytes: Uint8Array;
+  try {
+    const res = await outputFetcher(outputUri);
+    if (!res.ok) {
+      return jsonResponse(
+        {
+          error: {
+            status: res.status,
+            message: `Failed to fetch Replicate output (status ${res.status})`,
+          },
+        },
+        502,
+      );
+    }
+    bytes = new Uint8Array(await res.arrayBuffer());
+  } catch (err) {
+    const { status, message } = extractUpstreamError(err);
+    return jsonResponse({ error: { status, message } }, 502);
+  }
+
   const id = uniqueId();
   await env.TLDRAW_BUCKET.put(`uploads/${id}`, bytes, {
     httpMetadata: { contentType: "image/png" },
@@ -163,11 +200,45 @@ function jsonResponse(body: unknown, status: number): Response {
   });
 }
 
-function decodeBase64(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+function bytesToBase64(bytes: Uint8Array): string {
+  // btoa works on binary strings; chunk to avoid spreading megabytes of args.
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const end = Math.min(i + chunkSize, bytes.length);
+    binary += String.fromCharCode(...bytes.subarray(i, end));
+  }
+  return btoa(binary);
+}
+
+function resolveFirstOutputUri(output: unknown): string | null {
+  if (Array.isArray(output)) {
+    if (output.length === 0) return null;
+    return resolveUri(output[0]);
+  }
+  return resolveUri(output);
+}
+
+function resolveUri(item: unknown): string | null {
+  if (item == null) return null;
+  if (typeof item === "string") return item;
+  if (item instanceof URL) return item.toString();
+  if (typeof item === "object") {
+    const maybe = item as { url?: unknown };
+    if (typeof maybe.url === "function") {
+      try {
+        const result = (maybe.url as () => unknown)();
+        if (typeof result === "string") return result;
+        if (result instanceof URL) return result.toString();
+        if (result && typeof result === "object") return String(result);
+      } catch {
+        return null;
+      }
+    } else if (typeof maybe.url === "string") {
+      return maybe.url;
+    }
+  }
+  return null;
 }
 
 function extractUpstreamError(err: unknown): {
@@ -178,9 +249,19 @@ function extractUpstreamError(err: unknown): {
     const maybe = err as {
       status?: unknown;
       message?: unknown;
+      response?: { status?: unknown };
       error?: { message?: unknown };
     };
-    const status = typeof maybe.status === "number" ? maybe.status : 500;
+    let status = 500;
+    if (typeof maybe.status === "number") {
+      status = maybe.status;
+    } else if (
+      maybe.response &&
+      typeof maybe.response === "object" &&
+      typeof maybe.response.status === "number"
+    ) {
+      status = maybe.response.status;
+    }
     let message: string | undefined;
     if (
       maybe.error &&
@@ -191,7 +272,7 @@ function extractUpstreamError(err: unknown): {
     } else if (typeof maybe.message === "string") {
       message = maybe.message;
     }
-    return { status, message: message || "OpenAI request failed" };
+    return { status, message: message || "Replicate request failed" };
   }
   return { status: 500, message: String(err) };
 }

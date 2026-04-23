@@ -9,7 +9,7 @@ declare namespace Cloudflare {
 	interface Env {
 		TLDRAW_BUCKET: R2Bucket;
 		TLSYNC_DURABLE_OBJECT: DurableObjectNamespace<import("./worker/worker").TLSyncDurableObject>;
-		OPENAI_API_KEY: string;
+		REPLICATE_API_TOKEN: string;
 	}
 }
 interface CloudflareBindings extends Cloudflare.Env {}
