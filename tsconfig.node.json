@@ -23,5 +23,6 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["vite.config.ts", "worker"]
+  "include": ["vite.config.ts", "worker"],
+  "exclude": ["worker/**/*.test.ts"]
 }
