@@ -793,7 +793,10 @@ function ImagePromptForm({
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  // Bound to the form element so Escape closes the form regardless of
+  // which internal control (input, Cancel button, Submit button) has focus.
+  // Keeps VAL-CANVAS-021 working for the input-focused path.
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLFormElement>) => {
     if (e.key === "Escape") {
       e.preventDefault();
       onCancel();
@@ -805,6 +808,7 @@ function ImagePromptForm({
       <form
         className="graze-image-form"
         onSubmit={handleSubmit}
+        onKeyDown={handleKeyDown}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <input
@@ -815,7 +819,6 @@ function ImagePromptForm({
             setValue(e.target.value);
             if (hint) setHint(null);
           }}
-          onKeyDown={handleKeyDown}
           placeholder={placeholder}
           aria-label="Image prompt"
         />
