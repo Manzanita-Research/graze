@@ -72,8 +72,14 @@ export async function handleAssetDownload(
 
   // cloudflare doesn't set the content-range header automatically in writeHttpMetadata, so we
   // need to do it ourselves.
+  //
+  // Only honor object.range when the caller actually sent a Range request header. The wrangler
+  // R2 simulator (miniflare) populates object.range on every GET, and in dev its numeric fields
+  // can come through as NaN, which previously produced a malformed `content-range: bytes NaN-...`
+  // plus a spurious 206 on plain GETs that `curl` rejects.
+  const hasRangeHeader = request.headers.has("range");
   let contentRange;
-  if (object.range) {
+  if (hasRangeHeader && object.range) {
     if ("suffix" in object.range) {
       const start = object.size - object.range.suffix;
       const end = object.size - 1;
