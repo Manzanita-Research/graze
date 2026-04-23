@@ -13,11 +13,17 @@
  *   move_viewport  — pan/zoom the canvas view
  *   read_canvas    — get the latest canvas snapshot as a base64 PNG
  *   read_messages  — read recent messages from the canvas
+ *   generate_image — generate a new image shape via gpt-image-2
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import * as z from "zod/v4";
+import {
+  GENERATE_IMAGE_INSTRUCTIONS,
+  generateImageInputSchema,
+  runGenerateImage,
+} from "./generateImage";
 
 const BASE_URL = process.env.GRAZE_URL ?? "http://localhost:3737";
 
@@ -79,9 +85,12 @@ Graze is a collaborative tldraw canvas. You can manipulate it directly:
 - create_shape — create any shape (note, text, geo, arrow, draw)
 - update_shape — modify an existing shape's properties
 - delete_shapes — remove shapes by ID
+- generate_image — generate a new image shape on the canvas via gpt-image-2
 
 **Navigation:**
 - move_viewport — pan and zoom the canvas view
+
+${GENERATE_IMAGE_INSTRUCTIONS}
 
 **Shape types you can create:**
 - "note" — sticky note with text (props: richText, color, size)
@@ -309,6 +318,27 @@ mcp.registerTool(
         },
       ],
     };
+  },
+);
+
+mcp.registerTool(
+  "generate_image",
+  {
+    description:
+      "Generate a new image shape on the Graze canvas using gpt-image-2. " +
+      "Provide a text prompt describing what to draw. Optionally pass " +
+      "referenceShapeIds — an array of existing tldraw shape ids whose " +
+      "rasterized bitmap will be used as a reference image for an edit-style " +
+      "generation. Optional x/y position the resulting image on the canvas. " +
+      "Returns content[0].text as a JSON string containing { url, shapeId } " +
+      "so both the uploads URL and the created tldraw shape id are available.",
+    inputSchema: generateImageInputSchema,
+  },
+  async ({ prompt, referenceShapeIds, x, y }) => {
+    return runGenerateImage(
+      { prompt, referenceShapeIds, x, y },
+      { baseUrl: BASE_URL },
+    );
   },
 );
 
