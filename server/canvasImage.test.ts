@@ -337,6 +337,47 @@ describe("POST /api/canvas/rasterize_response", () => {
     expect(res.status).toBe(404);
   });
 
+  test("unknown requestId with garbage base64 dataUrl still returns 404 (404 wins over bad payload)", async () => {
+    const h = makeHarness();
+    const res = await h.handlers.handleRasterizeResponse(
+      rasterizeReq({
+        requestId: "does-not-exist",
+        dataUrl: "data:image/png;base64,not-real-base64!!!",
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  test("unknown requestId with empty base64 dataUrl still returns 404 (404 wins over empty payload)", async () => {
+    const h = makeHarness();
+    const res = await h.handlers.handleRasterizeResponse(
+      rasterizeReq({
+        requestId: "does-not-exist",
+        dataUrl: "data:image/png;base64,",
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  test("unknown requestId with missing dataUrl still returns 404 (404 wins over missing dataUrl)", async () => {
+    const h = makeHarness();
+    const res = await h.handlers.handleRasterizeResponse(
+      rasterizeReq({ requestId: "does-not-exist" }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  test("unknown requestId with non-data-URL still returns 404 (404 wins over bad prefix)", async () => {
+    const h = makeHarness();
+    const res = await h.handlers.handleRasterizeResponse(
+      rasterizeReq({
+        requestId: "does-not-exist",
+        dataUrl: "not a data url",
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
   test("missing requestId returns 400", async () => {
     const h = makeHarness();
     const res = await h.handlers.handleRasterizeResponse(

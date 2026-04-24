@@ -195,6 +195,16 @@ export function createCanvasImageHandlers(deps: CanvasImageDeps) {
     if (!requestId) {
       return jsonResponse({ error: "requestId is required" }, 400);
     }
+
+    // The unknown-requestId → 404 check MUST come before any dataUrl
+    // validation so a stale/unknown id still wins over garbage payload. The
+    // inverse order (validating dataUrl first) would surface a 400 for
+    // unknown requestIds with bad payloads, breaking the documented contract.
+    const entry = pending.get(requestId);
+    if (!entry) {
+      return jsonResponse({ error: "unknown requestId" }, 404);
+    }
+
     const dataUrl =
       typeof body.dataUrl === "string" ? body.dataUrl : undefined;
     if (!dataUrl || !/^data:image\/[a-z0-9+.-]+;base64,/i.test(dataUrl)) {
@@ -225,10 +235,6 @@ export function createCanvasImageHandlers(deps: CanvasImageDeps) {
       );
     }
 
-    const entry = pending.get(requestId);
-    if (!entry) {
-      return jsonResponse({ error: "unknown requestId" }, 404);
-    }
     clearTimeout(entry.timeout);
     pending.delete(requestId);
     entry.resolve(dataUrl);
