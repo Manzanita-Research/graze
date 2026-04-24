@@ -21,6 +21,7 @@ import {
   buildPromptFromSelection,
   isTextOnlySelection,
 } from "./imagePromptComposition";
+import { evaluateZoomDetent } from "./zoomDetent";
 
 const API_URL =
   import.meta.env.VITE_API_URL || "http://localhost:3737";
@@ -583,21 +584,21 @@ function ZoomHelper() {
       twoFingerStart = 0;
     };
 
-    const DETENT = 0.04;
     let prevZoom = editor.getZoomLevel();
     let snappedAt100 = false;
 
     const unsub = editor.store.listen(() => {
       const zoom = editor.getZoomLevel();
       if (zoom === prevZoom) return;
-      const crossed = (prevZoom < 1 && zoom > 1) || (prevZoom > 1 && zoom < 1);
-      const near100 = Math.abs(zoom - 1) < DETENT;
-      if ((crossed || near100) && !snappedAt100) {
-        snappedAt100 = true;
+      const { shouldSnap, nextSnappedAt100 } = evaluateZoomDetent({
+        prevZoom,
+        zoom,
+        snappedAt100,
+      });
+      snappedAt100 = nextSnappedAt100;
+      if (shouldSnap) {
         const cam = editor.getCamera();
         editor.setCamera({ x: cam.x, y: cam.y, z: 1 }, { immediate: true });
-      } else if (Math.abs(zoom - 1) > DETENT * 2) {
-        snappedAt100 = false;
       }
       prevZoom = editor.getZoomLevel();
     });
