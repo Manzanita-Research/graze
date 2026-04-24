@@ -1214,13 +1214,19 @@ function App() {
           // Agent updates a shape's props
           if (data.type === "canvas:update_shape") {
             const shapes = editor.getCurrentPageShapes();
-            const target = shapes.find((sh) => sh.id.includes(data.shapeId));
+            const target =
+              shapes.find((sh) => sh.id === data.shapeId) ??
+              shapes.find((sh) => sh.id.endsWith(data.shapeId));
             if (target) {
-              editor.updateShape({
-                id: target.id,
-                type: target.type,
-                props: { ...target.props, ...data.props },
-              });
+              try {
+                editor.updateShape({
+                  id: target.id,
+                  type: target.type,
+                  props: data.props,
+                });
+              } catch (err) {
+                console.error("canvas:update_shape failed", err);
+              }
             }
           }
 
