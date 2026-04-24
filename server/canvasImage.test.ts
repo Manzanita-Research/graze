@@ -385,6 +385,78 @@ describe("POST /api/canvas/rasterize_response", () => {
     await p;
   });
 
+  test("garbage base64 body after a valid prefix returns 400 mentioning 'dataUrl' and 'invalid base64', leaves pending request intact", async () => {
+    const h = makeHarness({
+      idSequence: ["REQ1", "SHAPE1"],
+      rasterizeTimeoutMs: 5_000,
+    });
+    const p = h.handlers.handleGenerateImage(
+      jsonReq({ prompt: "x", referenceShapeIds: ["shape:a"] }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.handlers._pendingRequestCount()).toBe(1);
+
+    const res = await h.handlers.handleRasterizeResponse(
+      rasterizeReq({
+        requestId: "REQ1",
+        dataUrl: "data:image/png;base64,not-real-base64!!!",
+      }),
+    );
+    expect(res.status).toBe(400);
+    const errBody = await res.text();
+    expect(errBody.toLowerCase()).toContain("dataurl");
+    expect(errBody.toLowerCase()).toContain("invalid base64");
+
+    // Pending request NOT resolved — it is still awaiting a valid rasterize.
+    expect(h.handlers._pendingRequestCount()).toBe(1);
+    // Worker never called because rasterize never resolved.
+    expect(h.workerCalls).toHaveLength(0);
+
+    // A retry with a valid dataUrl still resolves the original pending request.
+    const retry = await h.handlers.handleRasterizeResponse(
+      rasterizeReq({ requestId: "REQ1", dataUrl: TINY_PNG_DATAURL }),
+    );
+    expect(retry.status).toBe(200);
+    const finalRes = await p;
+    expect(finalRes.status).toBe(200);
+    expect(h.workerCalls).toHaveLength(1);
+  });
+
+  test("zero-byte base64 body (data:image/png;base64,) returns 400 mentioning 'dataUrl', leaves pending request intact", async () => {
+    const h = makeHarness({
+      idSequence: ["REQ1", "SHAPE1"],
+      rasterizeTimeoutMs: 5_000,
+    });
+    const p = h.handlers.handleGenerateImage(
+      jsonReq({ prompt: "x", referenceShapeIds: ["shape:a"] }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.handlers._pendingRequestCount()).toBe(1);
+
+    const res = await h.handlers.handleRasterizeResponse(
+      rasterizeReq({
+        requestId: "REQ1",
+        dataUrl: "data:image/png;base64,",
+      }),
+    );
+    expect(res.status).toBe(400);
+    const errBody = await res.text();
+    expect(errBody.toLowerCase()).toContain("dataurl");
+
+    // Pending request is still there.
+    expect(h.handlers._pendingRequestCount()).toBe(1);
+    expect(h.workerCalls).toHaveLength(0);
+
+    // Release the pending request with a valid dataUrl so we don't leak the
+    // generateImage promise or timer into the next test.
+    await h.handlers.handleRasterizeResponse(
+      rasterizeReq({ requestId: "REQ1", dataUrl: TINY_PNG_DATAURL }),
+    );
+    await p;
+  });
+
   test("invalid JSON body returns 400", async () => {
     const h = makeHarness();
     const req = new Request("http://localhost/api/canvas/rasterize_response", {

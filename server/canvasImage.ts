@@ -202,6 +202,29 @@ export function createCanvasImageHandlers(deps: CanvasImageDeps) {
       return jsonResponse({ error: "valid dataUrl is required" }, 400);
     }
 
+    // The prefix is right, but the base64 payload may still be garbage or
+    // empty. Without this check a well-prefixed but undecodable body would
+    // resolve the pending request and make the downstream worker call fail
+    // later as a confusing 5xx. Leave the pending request untouched so the
+    // caller can retry with a valid rasterize or time out cleanly.
+    const commaIdx = dataUrl.indexOf(",");
+    const b64Payload = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : "";
+    let decodedLength: number;
+    try {
+      decodedLength = atob(b64Payload).length;
+    } catch {
+      return jsonResponse(
+        { error: "invalid base64 payload in dataUrl" },
+        400,
+      );
+    }
+    if (decodedLength === 0) {
+      return jsonResponse(
+        { error: "invalid base64 payload in dataUrl (empty)" },
+        400,
+      );
+    }
+
     const entry = pending.get(requestId);
     if (!entry) {
       return jsonResponse({ error: "unknown requestId" }, 404);
