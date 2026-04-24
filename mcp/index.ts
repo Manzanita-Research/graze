@@ -150,9 +150,9 @@ mcp.registerTool(
       y: z.optional(z.number().describe("Y position on canvas (default: 0)")),
       props: z.optional(
         z
-          .object()
+          .looseObject({})
           .describe(
-            "Shape-specific properties. For note/text: { richText: string (will be converted), color: string, size: 's'|'m'|'l'|'xl' }. For geo: { w: number, h: number, geo: 'rectangle'|'ellipse'|'diamond', color: string, fill: 'none'|'semi'|'solid' }",
+            "Shape-specific properties (pass-through; all caller keys are preserved). For note/text: { richText: string (will be converted), color: string, size: 's'|'m'|'l'|'xl' }. For geo: { w: number, h: number, geo: 'rectangle'|'ellipse'|'diamond', color: string, fill: 'none'|'semi'|'solid' }",
           ),
       ),
       id: z.optional(
@@ -190,8 +190,10 @@ mcp.registerTool(
     inputSchema: z.object({
       shapeId: z.string().describe("The ID of the shape to update"),
       props: z
-        .object({})
-        .describe("Properties to update (merged with existing props)"),
+        .looseObject({})
+        .describe(
+          "Properties to update, merged with existing props. Pass-through object: all caller-supplied keys are preserved (e.g. { color: 'red', size: 'xl', w: 200 }).",
+        ),
     }),
   },
   async ({ shapeId, props }) => {
