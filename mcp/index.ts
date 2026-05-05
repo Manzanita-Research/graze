@@ -75,7 +75,7 @@ Graze is a collaborative tldraw canvas. You can manipulate it directly:
 
 **Writing to the canvas:**
 - reply — quick text reply as a sticky note
-- create_shape — create any shape (note, text, geo, arrow, draw)
+- create_shape — create any shape (note, text, geo, arrow). Omit x/y to let Graze place it in open canvas space.
 - update_shape — modify an existing shape's properties
 - delete_shapes — remove shapes by ID
 - generate_image — generate a new image shape on the canvas via gpt-image-2
@@ -92,6 +92,8 @@ ${GENERATE_IMAGE_INSTRUCTIONS}
 - "arrow" — connecting arrow
 
 **Colors:** "black", "grey", "light-violet", "violet", "blue", "light-blue", "yellow", "orange", "green", "light-green", "light-red", "red"
+**Layout hints:** "heading", "caption", "compact", "wide", "card"
+**Style hints:** "muted", "question", "warning", "success", "idea"
 
 ${getPassiveChannelInstructions(PASSIVE_CHANNEL_MODE)}
 
@@ -133,13 +135,31 @@ mcp.registerTool(
   "create_shape",
   {
     description:
-      "Create a shape on the Graze canvas. Supports note (sticky note), text, geo (rectangle/ellipse), and arrow types.",
+      "Create a shape on the Graze canvas. Supports note (sticky note), text, geo (rectangle/ellipse), and arrow types. Omit x/y to auto-place in open canvas space.",
     inputSchema: z.object({
       type: z
         .enum(["note", "text", "geo", "arrow"])
         .describe("Shape type: 'note', 'text', 'geo', or 'arrow'"),
-      x: z.optional(z.number().describe("X position on canvas (default: 0)")),
-      y: z.optional(z.number().describe("Y position on canvas (default: 0)")),
+      x: z.optional(
+        z.number().describe("Optional X position on canvas. Omit for auto-placement."),
+      ),
+      y: z.optional(
+        z.number().describe("Optional Y position on canvas. Omit for auto-placement."),
+      ),
+      layout: z.optional(
+        z
+          .enum(["heading", "caption", "compact", "wide", "card"])
+          .describe(
+            "Optional layout intent. heading is large, caption is small text, compact is tight, wide wraps long text, card is a larger labeled box.",
+          ),
+      ),
+      style: z.optional(
+        z
+          .enum(["muted", "question", "warning", "success", "idea"])
+          .describe(
+            "Optional semantic style intent that picks sensible default colors/fills.",
+          ),
+      ),
       props: z.optional(
         z
           .looseObject({})
@@ -156,14 +176,17 @@ mcp.registerTool(
       ),
     }),
   },
-  async ({ type, x, y, props, id }) => {
-    await apiPost("/api/canvas/create_shape", {
+  async ({ type, x, y, layout, style, props, id }) => {
+    const body: Record<string, unknown> = {
       type: type ?? "geo",
-      x: x ?? 0,
-      y: y ?? 0,
       props: props ?? {},
-      id: id,
-    });
+      id,
+    };
+    if (x !== undefined) body.x = x;
+    if (y !== undefined) body.y = y;
+    if (layout !== undefined) body.layout = layout;
+    if (style !== undefined) body.style = style;
+    await apiPost("/api/canvas/create_shape", body);
     return {
       content: [
         {

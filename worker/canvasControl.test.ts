@@ -164,4 +164,88 @@ describe("authoritative canvas control helpers", () => {
     expect(shape.props.h).toBeGreaterThanOrEqual(100);
     expect(shape.props.growY).toBe(0);
   });
+
+  test("omitted coordinates auto-place new shapes away from existing shapes", () => {
+    const store = createStore();
+
+    const first = createCanvasShape(store, {
+      id: "auto-a",
+      type: "note",
+      props: { richText: "first" },
+    });
+    const second = createCanvasShape(store, {
+      id: "auto-b",
+      type: "note",
+      props: { richText: "second" },
+    });
+
+    expect(first.x).toBe(120);
+    expect(first.y).toBe(120);
+    expect({ x: second.x, y: second.y }).not.toEqual({
+      x: first.x,
+      y: first.y,
+    });
+  });
+
+  test("recreating an existing shape id preserves its position when x/y are omitted", () => {
+    const store = createStore();
+
+    createCanvasShape(store, {
+      id: "stable",
+      type: "text",
+      x: 345,
+      y: 456,
+      props: { richText: "before" },
+    });
+    const recreated = createCanvasShape(store, {
+      id: "stable",
+      type: "text",
+      props: { richText: "after" },
+    });
+
+    expect(recreated.x).toBe(345);
+    expect(recreated.y).toBe(456);
+  });
+
+  test("layout and style hints choose useful defaults without leaking into props", () => {
+    const store = createStore();
+
+    const heading = createCanvasShape(store, {
+      id: "heading",
+      type: "text",
+      layout: "heading",
+      style: "idea",
+      props: { richText: "A useful heading" },
+    });
+
+    expect(heading.type).toBe("text");
+    expect(heading.props.size).toBe("xl");
+    expect(heading.props.w).toBe(720);
+    expect(heading.props.autoSize).toBe(false);
+    expect(heading.props.color).toBe("violet");
+    expect("layout" in heading.props).toBe(false);
+    expect("style" in heading.props).toBe(false);
+  });
+
+  test("props-level layout and style hints are accepted and stripped", () => {
+    const store = createStore();
+
+    const card = createCanvasShape(store, {
+      id: "card",
+      type: "geo",
+      props: {
+        layout: "card",
+        style: "warning",
+        richText: "Needs attention",
+      },
+    });
+
+    expect(card.type).toBe("geo");
+    expect(card.props.w).toBe(320);
+    expect(card.props.h).toBe(180);
+    expect(card.props.color).toBe("red");
+    expect(card.props.fill).toBe("semi");
+    expect("layout" in card.props).toBe(false);
+    expect("style" in card.props).toBe(false);
+  });
 });

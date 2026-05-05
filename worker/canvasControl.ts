@@ -23,12 +23,22 @@ const TEXT_FONT_SIZES = { s: 18, m: 24, l: 36, xl: 44 } as const;
 const LABEL_FONT_SIZES = { s: 18, m: 22, l: 26, xl: 32 } as const;
 const TEXT_LINE_HEIGHT = 1.35;
 const DEFAULT_SIZE = "m";
+const AUTO_PLACE_START = { x: 120, y: 120 };
+const AUTO_PLACE_MAX_X = 1400;
+const AUTO_PLACE_GAP = 48;
+const AUTO_PLACE_MARGIN = 24;
+
+type CanvasShapeType = "note" | "text" | "geo" | "arrow" | "image";
+type LayoutHint = "auto" | "heading" | "caption" | "compact" | "wide" | "card";
+type StyleHint = "default" | "muted" | "question" | "warning" | "success" | "idea";
 
 export interface CanvasCreateShapeInput {
   id?: unknown;
   type?: unknown;
   x?: unknown;
   y?: unknown;
+  layout?: unknown;
+  style?: unknown;
   props?: unknown;
 }
 
@@ -51,11 +61,19 @@ export interface RoomStore {
 export function createCanvasShape(store: RoomStore, input: CanvasCreateShapeInput) {
   const shapeType =
     typeof input.type === "string" && CANVAS_SHAPE_TYPES.has(input.type)
-      ? input.type
+      ? (input.type as CanvasShapeType)
       : "geo";
   const props = isRecord(input.props) ? input.props : {};
+  const layout = getLayoutHint(input.layout ?? props.layout);
+  const style = getStyleHint(input.style ?? props.style ?? props.tone);
   const shapeId = normalizeShapeId(input.id);
-  const base = createShapeBase(store, shapeId, input.x, input.y);
+  const existing = findShape(store, shapeId);
+  const base = createShapeBase(
+    store,
+    shapeId,
+    input.x ?? existing?.x,
+    input.y ?? existing?.y,
+  );
 
   let shape: TLShape;
   const recordsToPut: TLRecord[] = [];
@@ -77,7 +95,9 @@ export function createCanvasShape(store: RoomStore, input: CanvasCreateShapeInpu
           url: "",
           richText: toRichText(""),
           scale: 1,
-          ...getNoteLayoutProps(props),
+          ...getStyleProps("note", style),
+          ...getLayoutPresetProps("note", layout),
+          ...getNoteLayoutProps(props, layout),
           ...withRichText(props),
         },
       } satisfies TLNoteShape;
@@ -95,7 +115,9 @@ export function createCanvasShape(store: RoomStore, input: CanvasCreateShapeInpu
           richText: toRichText(""),
           scale: 1,
           autoSize: true,
-          ...getTextLayoutProps(props),
+          ...getStyleProps("text", style),
+          ...getLayoutPresetProps("text", layout),
+          ...getTextLayoutProps(props, layout),
           ...withRichText(props),
         },
       } satisfies TLTextShape;
@@ -121,6 +143,7 @@ export function createCanvasShape(store: RoomStore, input: CanvasCreateShapeInpu
           labelPosition: 0.5,
           scale: 1,
           elbowMidPoint: 0.5,
+          ...getStyleProps("arrow", style),
           ...withRichText(props),
         },
       } satisfies TLArrowShape;
@@ -157,6 +180,7 @@ export function createCanvasShape(store: RoomStore, input: CanvasCreateShapeInpu
           flipX: false,
           flipY: false,
           altText: "",
+          ...getLayoutPresetProps("image", layout),
         },
       } satisfies TLImageShape;
       break;
@@ -181,11 +205,22 @@ export function createCanvasShape(store: RoomStore, input: CanvasCreateShapeInpu
           align: "middle",
           verticalAlign: "middle",
           richText: toRichText(""),
-          ...getGeoLayoutProps(props),
+          ...getStyleProps("geo", style),
+          ...getLayoutPresetProps("geo", layout),
+          ...getGeoLayoutProps(props, layout),
           ...withRichText(props),
         },
       } satisfies TLGeoShape;
       break;
+  }
+
+  if (!existing && (!isFiniteNumber(input.x) || !isFiniteNumber(input.y))) {
+    const position = findOpenPosition(store, shape);
+    shape = {
+      ...shape,
+      x: isFiniteNumber(input.x) ? input.x : position.x,
+      y: isFiniteNumber(input.y) ? input.y : position.y,
+    } as TLShape;
   }
 
   for (const record of recordsToPut) store.put(record);
@@ -261,6 +296,95 @@ function createShapeBase(
   };
 }
 
+function findOpenPosition(store: RoomStore, shape: TLShape) {
+  const footprint = getShapeFootprint(shape);
+  const existing = getCanvasShapes(store)
+    .filter((other) => other.id !== shape.id && other.parentId === DEFAULT_PAGE_ID)
+    .map(getShapeBounds);
+  const stepX = Math.max(180, Math.ceil(footprint.w + AUTO_PLACE_GAP));
+  const stepY = Math.max(140, Math.ceil(footprint.h + AUTO_PLACE_GAP));
+
+  for (let y = AUTO_PLACE_START.y; y < 4000; y += stepY) {
+    for (let x = AUTO_PLACE_START.x; x < AUTO_PLACE_MAX_X; x += stepX) {
+      const candidate = { x, y, w: footprint.w, h: footprint.h };
+      if (!existing.some((bounds) => boxesOverlap(candidate, bounds))) {
+        return { x, y };
+      }
+    }
+  }
+
+  const bottom = existing.reduce(
+    (max, bounds) => Math.max(max, bounds.y + bounds.h),
+    AUTO_PLACE_START.y,
+  );
+  return { x: AUTO_PLACE_START.x, y: bottom + AUTO_PLACE_GAP };
+}
+
+function getShapeBounds(shape: TLShape) {
+  const footprint = getShapeFootprint(shape);
+  return {
+    x: shape.x - AUTO_PLACE_MARGIN,
+    y: shape.y - AUTO_PLACE_MARGIN,
+    w: footprint.w + AUTO_PLACE_MARGIN * 2,
+    h: footprint.h + AUTO_PLACE_MARGIN * 2,
+  };
+}
+
+function getShapeFootprint(shape: TLShape) {
+  switch (shape.type) {
+    case "note":
+      return {
+        w: NOTE_SIZE * shape.props.scale,
+        h: (NOTE_SIZE + shape.props.growY) * shape.props.scale,
+      };
+    case "text": {
+      const text = plainTextFromRichText(shape.props.richText);
+      const width = shape.props.autoSize
+        ? estimateTextWidth(text, getTextFontSize(shape.props), 560)
+        : shape.props.w;
+      return {
+        w: width * shape.props.scale,
+        h:
+          estimateWrappedTextHeight(
+            text,
+            getTextFontSize(shape.props),
+            width,
+            0,
+          ) * shape.props.scale,
+      };
+    }
+    case "geo":
+      return {
+        w: shape.props.w * shape.props.scale,
+        h: (shape.props.h + shape.props.growY) * shape.props.scale,
+      };
+    case "arrow": {
+      const start = shape.props.start;
+      const end = shape.props.end;
+      return {
+        w: Math.max(80, Math.abs(end.x - start.x) + 40),
+        h: Math.max(60, Math.abs(end.y - start.y) + 40),
+      };
+    }
+    case "image":
+      return { w: shape.props.w, h: shape.props.h };
+    default:
+      return { w: 220, h: 140 };
+  }
+}
+
+function boxesOverlap(
+  a: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number },
+) {
+  return (
+    a.x < b.x + b.w &&
+    a.x + a.w > b.x &&
+    a.y < b.y + b.h &&
+    a.y + a.h > b.y
+  );
+}
+
 function normalizeShapeId(id: unknown): TLShapeId {
   if (typeof id === "string" && id.length > 0) {
     return id.startsWith("shape:")
@@ -294,10 +418,125 @@ function withRichText(props: Record<string, unknown>): Record<string, unknown> {
   delete next.text;
   delete next.nativeW;
   delete next.nativeH;
+  delete next.layout;
+  delete next.style;
+  delete next.tone;
   return next;
 }
 
-function getTextLayoutProps(props: Record<string, unknown>) {
+function getLayoutHint(value: unknown): LayoutHint {
+  if (
+    value === "heading" ||
+    value === "caption" ||
+    value === "compact" ||
+    value === "wide" ||
+    value === "card"
+  ) {
+    return value;
+  }
+  return "auto";
+}
+
+function getStyleHint(value: unknown): StyleHint {
+  return value === "muted" ||
+    value === "question" ||
+    value === "warning" ||
+    value === "success" ||
+    value === "idea"
+    ? value
+    : "default";
+}
+
+function getStyleProps(
+  shapeType: Exclude<CanvasShapeType, "image">,
+  style: StyleHint,
+) {
+  if (style === "default") return {};
+
+  const palette = {
+    muted: {
+      text: { color: "grey" },
+      note: { color: "grey", labelColor: "black" },
+      geo: { color: "grey", labelColor: "black", fill: "none" },
+      arrow: { color: "grey", labelColor: "black" },
+    },
+    question: {
+      text: { color: "blue" },
+      note: { color: "light-blue", labelColor: "black" },
+      geo: { color: "blue", labelColor: "black", fill: "semi" },
+      arrow: { color: "blue", labelColor: "black" },
+    },
+    warning: {
+      text: { color: "red" },
+      note: { color: "light-red", labelColor: "black" },
+      geo: { color: "red", labelColor: "black", fill: "semi" },
+      arrow: { color: "red", labelColor: "black" },
+    },
+    success: {
+      text: { color: "green" },
+      note: { color: "light-green", labelColor: "black" },
+      geo: { color: "green", labelColor: "black", fill: "semi" },
+      arrow: { color: "green", labelColor: "black" },
+    },
+    idea: {
+      text: { color: "violet" },
+      note: { color: "yellow", labelColor: "black" },
+      geo: { color: "violet", labelColor: "black", fill: "semi" },
+      arrow: { color: "violet", labelColor: "black" },
+    },
+  } satisfies Record<
+    Exclude<StyleHint, "default">,
+    Record<Exclude<CanvasShapeType, "image">, Record<string, unknown>>
+  >;
+
+  return palette[style][shapeType];
+}
+
+function getLayoutPresetProps(shapeType: CanvasShapeType, layout: LayoutHint) {
+  if (layout === "auto") return {};
+
+  const presets = {
+    heading: {
+      text: { size: "xl", w: 720, autoSize: false },
+      note: { size: "xl", scale: 1.2 },
+      geo: { w: 520, h: 120, size: "xl" },
+      arrow: {},
+      image: { w: 512, h: 512 },
+    },
+    caption: {
+      text: { size: "s", w: 360, autoSize: false },
+      note: { size: "s" },
+      geo: { w: 240, h: 80, size: "s" },
+      arrow: { size: "s" },
+      image: { w: 240, h: 240 },
+    },
+    compact: {
+      text: { size: "s", w: 260, autoSize: false },
+      note: { size: "s" },
+      geo: { w: 180, h: 80, size: "s" },
+      arrow: { size: "s" },
+      image: { w: 220, h: 220 },
+    },
+    wide: {
+      text: { w: 560, autoSize: false },
+      note: {},
+      geo: { w: 520, h: 140 },
+      arrow: { end: { x: 180, y: 0 } },
+      image: { w: 448, h: 448 },
+    },
+    card: {
+      text: { w: 360, autoSize: false },
+      note: {},
+      geo: { w: 320, h: 180, fill: "semi" },
+      arrow: {},
+      image: { w: 384, h: 384 },
+    },
+  } satisfies Record<Exclude<LayoutHint, "auto">, Record<CanvasShapeType, object>>;
+
+  return presets[layout][shapeType];
+}
+
+function getTextLayoutProps(props: Record<string, unknown>, layout: LayoutHint) {
   const hasExplicitWidth = isFiniteNumber(props.w);
   const hasExplicitAutoSize = typeof props.autoSize === "boolean";
   const text = getPlainTextFromProps(props);
@@ -306,7 +545,9 @@ function getTextLayoutProps(props: Record<string, unknown>) {
     return { autoSize: false };
   }
 
-  if (!text || hasExplicitAutoSize || hasExplicitWidth) return {};
+  if (!text || layout !== "auto" || hasExplicitAutoSize || hasExplicitWidth) {
+    return {};
+  }
 
   const lineStats = getTextStats(text);
   if (lineStats.longestLine <= 22 && lineStats.lineCount === 1) return {};
@@ -317,13 +558,13 @@ function getTextLayoutProps(props: Record<string, unknown>) {
   };
 }
 
-function getNoteLayoutProps(props: Record<string, unknown>) {
+function getNoteLayoutProps(props: Record<string, unknown>, layout: LayoutHint) {
   const text = getPlainTextFromProps(props);
   if (!text) return {};
 
   const hasExplicitGrowY = isFiniteNumber(props.growY);
   const hasExplicitFontSizeAdjustment = isFiniteNumber(props.fontSizeAdjustment);
-  const fontSize = getNoteFontSize(props);
+  const fontSize = getNoteFontSize(props, layout);
   const fontSizeAdjustment = hasExplicitFontSizeAdjustment
     ? undefined
     : getNoteFontSizeAdjustment(text, fontSize);
@@ -342,9 +583,9 @@ function getNoteLayoutProps(props: Record<string, unknown>) {
   };
 }
 
-function getGeoLayoutProps(props: Record<string, unknown>) {
+function getGeoLayoutProps(props: Record<string, unknown>, layout: LayoutHint) {
   const text = getPlainTextFromProps(props);
-  if (!text) return {};
+  if (!text || layout !== "auto") return {};
 
   const hasExplicitWidth = isFiniteNumber(props.w);
   const hasExplicitHeight = isFiniteNumber(props.h);
@@ -455,19 +696,23 @@ function getTextStats(text: string) {
   };
 }
 
-function getTextFontSize(props: Record<string, unknown>) {
+function getTextFontSize(props: { size?: unknown }) {
   return TEXT_FONT_SIZES[getSize(props)];
 }
 
-function getLabelFontSize(props: Record<string, unknown>) {
+function getLabelFontSize(props: { size?: unknown }) {
   return LABEL_FONT_SIZES[getSize(props)];
 }
 
-function getNoteFontSize(props: Record<string, unknown>) {
+function getNoteFontSize(props: { size?: unknown }, layout: LayoutHint) {
+  if (props.size === undefined) {
+    if (layout === "caption" || layout === "compact") return LABEL_FONT_SIZES.s;
+    if (layout === "heading") return LABEL_FONT_SIZES.xl;
+  }
   return getLabelFontSize(props);
 }
 
-function getSize(props: Record<string, unknown>): keyof typeof LABEL_FONT_SIZES {
+function getSize(props: { size?: unknown }): keyof typeof LABEL_FONT_SIZES {
   return props.size === "s" ||
     props.size === "m" ||
     props.size === "l" ||

@@ -126,8 +126,8 @@ async function createShape(req: Request) {
   const result = await createAuthoritativeShape({
     type: "note",
     id: `reply-${msg.id}`,
-    x: 120,
-    y: 100,
+    layout: "compact",
+    style: from === "agent" ? "idea" : "question",
     props: {
       color: from === "agent" ? "light-violet" : "light-blue",
       richText: text,
@@ -156,8 +156,8 @@ async function createMessage(req: Request) {
   const result = await createAuthoritativeShape({
     type: "note",
     id: `message-${msg.id}`,
-    x: 120,
-    y: 100,
+    layout: "compact",
+    style: from === "agent" ? "idea" : "question",
     props: {
       color: from === "agent" ? "light-violet" : "yellow",
       richText: text,
