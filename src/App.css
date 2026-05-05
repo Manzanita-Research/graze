@@ -363,7 +363,6 @@ a[href*="tldraw.dev"] {
 }
 
 .tl-note__container {
-  background-color: #EDE4D3 !important;
   box-shadow: 0 1px 4px rgba(0,0,0,.08) !important;
 }
 

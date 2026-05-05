@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 /**
- * Graze MCP Channel Server
+ * Graze MCP Server
  *
- * Declares claude/channel capability so messages from the canvas
- * arrive as <channel source="graze"> events in Claude Code.
+ * Hosts the Graze tool surface over stdio MCP. Optional passive channel
+ * notifications can be enabled for clients that support them.
  *
  * Tools:
  *   reply          — send a text reply as a sticky note on the canvas
@@ -11,7 +11,8 @@
  *   update_shape   — modify an existing shape's properties
  *   delete_shapes  — remove shapes from the canvas
  *   move_viewport  — pan/zoom the canvas view
- *   read_canvas    — get the latest canvas snapshot as a base64 PNG
+ *   read_canvas    — get the latest browser-posted canvas snapshot as a base64 PNG
+ *   read_shapes    — get authoritative structured shape state from the Durable Object
  *   read_messages  — read recent messages from the canvas
  *   generate_image — generate a new image shape via gpt-image-2
  */
@@ -20,12 +21,22 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import * as z from "zod/v4";
 import {
+  buildHumanMessageNotification,
+  buildSnapshotNotification,
+  getPassiveChannelCapabilities,
+  getPassiveChannelInstructions,
+  parsePassiveChannelMode,
+} from "./channel";
+import {
   GENERATE_IMAGE_INSTRUCTIONS,
   generateImageInputSchema,
   runGenerateImage,
 } from "./generateImage";
 
 const BASE_URL = process.env.GRAZE_URL ?? "http://localhost:3737";
+const PASSIVE_CHANNEL_MODE = parsePassiveChannelMode(
+  process.env.GRAZE_MCP_CHANNEL,
+);
 
 // --- HTTP helpers ---
 
@@ -51,25 +62,6 @@ async function apiGet(path: string) {
   return res.json();
 }
 
-// --- Channel notification builder ---
-
-function buildChannelNotification(message: {
-  id: string;
-  text: string;
-  timestamp: string;
-}) {
-  return {
-    method: "notifications/claude/channel" as const,
-    params: {
-      content: message.text,
-      meta: {
-        message_id: message.id,
-        timestamp: message.timestamp,
-      },
-    },
-  };
-}
-
 // --- Instructions ---
 
 const INSTRUCTIONS = `You are connected to Graze — an ink surface where agents browse.
@@ -77,7 +69,8 @@ const INSTRUCTIONS = `You are connected to Graze — an ink surface where agents
 Graze is a collaborative tldraw canvas. You can manipulate it directly:
 
 **Reading the canvas:**
-- read_canvas — screenshot of the current canvas state
+- read_canvas — last browser-posted screenshot, if available
+- read_shapes — authoritative structured shape state from the Durable Object
 - read_messages — recent text messages
 
 **Writing to the canvas:**
@@ -100,8 +93,7 @@ ${GENERATE_IMAGE_INSTRUCTIONS}
 
 **Colors:** "black", "grey", "light-violet", "violet", "blue", "light-blue", "yellow", "orange", "green", "light-green", "light-red", "red"
 
-When the human sends a canvas snapshot, you'll get a channel notification. Use read_canvas to see it.
-When the human sends a message, it arrives as a <channel> event.
+${getPassiveChannelInstructions(PASSIVE_CHANNEL_MODE)}
 
 Keep canvas additions concise and well-positioned.`;
 
@@ -111,7 +103,7 @@ const mcp = new McpServer(
   { name: "graze", version: "0.3.0" },
   {
     capabilities: {
-      experimental: { "claude/channel": {}, "claude/channel/permission": {} },
+      ...getPassiveChannelCapabilities(PASSIVE_CHANNEL_MODE),
       tools: {},
     },
     instructions: INSTRUCTIONS,
@@ -290,7 +282,7 @@ mcp.registerTool(
   "read_canvas",
   {
     description:
-      "Get the latest canvas snapshot as a base64 PNG image. The human must press F12 or the snapshot button first.",
+      "Get the latest browser-posted canvas snapshot as a base64 PNG image. This is visual state only; use read_shapes for authoritative structured state.",
     inputSchema: z.object({}),
   },
   async () => {
@@ -316,7 +308,41 @@ mcp.registerTool(
         { type: "image" as const, data: base64, mimeType: "image/png" },
         {
           type: "text" as const,
-          text: `Canvas snapshot from ${result.snapshot.timestamp}`,
+          text: `Last browser-posted canvas snapshot from ${result.snapshot.timestamp}. This may be stale; use read_shapes for authoritative structured state.`,
+        },
+      ],
+    };
+  },
+);
+
+mcp.registerTool(
+  "read_shapes",
+  {
+    description:
+      "Read the authoritative structured canvas shape records from the Durable Object-backed tldraw store.",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    const result = (await apiGet("/api/canvas/shapes")) as {
+      clock?: number;
+      sessions?: number;
+      shapes?: unknown[];
+    };
+    const shapes = Array.isArray(result.shapes) ? result.shapes : [];
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(
+            {
+              clock: result.clock,
+              sessions: result.sessions,
+              shapeCount: shapes.length,
+              shapes,
+            },
+            null,
+            2,
+          ),
         },
       ],
     };
@@ -347,6 +373,8 @@ mcp.registerTool(
 // --- WebSocket listener for human messages ---
 
 function connectWebSocket() {
+  if (PASSIVE_CHANNEL_MODE === "off") return;
+
   const wsUrl = BASE_URL.replace(/^http/, "ws");
   let reconnectDelay = 1000;
 
@@ -363,17 +391,18 @@ function connectWebSocket() {
         try {
           const msg = JSON.parse(event.data as string);
           if (msg.type === "message:created" && msg.message?.from === "human") {
-            mcp.server.notification(buildChannelNotification(msg.message));
+            const notification = buildHumanMessageNotification(
+              PASSIVE_CHANNEL_MODE,
+              msg.message,
+            );
+            if (notification) mcp.server.notification(notification);
           }
           if (msg.type === "snapshot:created") {
-            mcp.server.notification({
-              method: "notifications/claude/channel" as const,
-              params: {
-                content:
-                  "The human sent a canvas snapshot. Use read_canvas to see it.",
-                meta: { timestamp: msg.timestamp, type: "snapshot" },
-              },
-            });
+            const notification = buildSnapshotNotification(
+              PASSIVE_CHANNEL_MODE,
+              msg.timestamp,
+            );
+            if (notification) mcp.server.notification(notification);
           }
         } catch {
           // ignore malformed messages
@@ -403,7 +432,7 @@ function connectWebSocket() {
 async function main() {
   await mcp.connect(new StdioServerTransport());
   connectWebSocket();
-  console.error("graze channel server ready");
+  console.error(`graze MCP server ready (${PASSIVE_CHANNEL_MODE} channel)`);
 }
 
 main();

@@ -265,6 +265,71 @@ describe("handleImageGeneration (Replicate)", () => {
     }
   });
 
+  test("multipart rejects too many reference images before calling Replicate", async () => {
+    const fakeR2 = createFakeR2();
+    __setReplicateClientFactory(() => createFakeReplicate(undefined, calls));
+
+    const form = new FormData();
+    form.append("prompt", "too many");
+    for (let i = 0; i < 4; i++) {
+      form.append(
+        "image",
+        new File([decodeB64(TINY_PNG_B64)], `${i}.png`, {
+          type: "image/png",
+        }),
+      );
+    }
+
+    const res = await handleImageGeneration(
+      makeFormRequest(form),
+      makeEnv(fakeR2.bucket),
+    );
+    expect(res.status).toBe(413);
+    expect(calls).toHaveLength(0);
+    expect(fakeR2.puts).toHaveLength(0);
+  });
+
+  test("multipart rejects unsupported reference image MIME types", async () => {
+    const fakeR2 = createFakeR2();
+    __setReplicateClientFactory(() => createFakeReplicate(undefined, calls));
+
+    const form = new FormData();
+    form.append("prompt", "bad mime");
+    form.append(
+      "image",
+      new File([decodeB64(TINY_PNG_B64)], "ref.gif", { type: "image/gif" }),
+    );
+
+    const res = await handleImageGeneration(
+      makeFormRequest(form),
+      makeEnv(fakeR2.bucket),
+    );
+    expect(res.status).toBe(415);
+    expect(calls).toHaveLength(0);
+    expect(fakeR2.puts).toHaveLength(0);
+  });
+
+  test("Replicate output with an oversized content-length is rejected before R2", async () => {
+    const fakeR2 = createFakeR2();
+    __setReplicateClientFactory(() => createFakeReplicate(undefined, calls));
+    __setReplicateOutputFetcher(async () => {
+      return new Response("too large", {
+        status: 200,
+        headers: {
+          "content-type": "image/png",
+          "content-length": `${13 * 1024 * 1024}`,
+        },
+      });
+    });
+
+    const res = await handleImageGeneration(
+      makeJsonRequest({ prompt: "x" }),
+      makeEnv(fakeR2.bucket),
+    );
+    expect(res.status).toBe(413);
+    expect(fakeR2.puts).toHaveLength(0);
+  });
+
   test("outgoing Replicate input hardcodes quality/aspect_ratio/output_format/number_of_images (pure prompt)", async () => {
     const fakeR2 = createFakeR2();
     __setReplicateClientFactory(() => createFakeReplicate(undefined, calls));

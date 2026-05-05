@@ -32,6 +32,12 @@ const DEFAULT_RASTERIZE_TIMEOUT_MS = 10_000;
 
 export interface CanvasImageDeps {
   broadcast: (message: WsMessage) => void;
+  createShape?: (
+    shape: Record<string, unknown>,
+  ) => Promise<
+    | { ok: true; body: unknown }
+    | { ok: false; res: Response; text: string }
+  >;
   /**
    * Called with a Request targeted at the Cloudflare worker's
    * /api/images/generate endpoint. The returned Response is forwarded (for
@@ -157,25 +163,32 @@ export function createCanvasImageHandlers(deps: CanvasImageDeps) {
       );
     }
 
-    // Step 3: broadcast canvas:create_shape so the frontend materialises a
-    // real tldraw image shape (asset registration happens on the frontend).
+    // Step 3: create the tldraw image shape. In production this should be the
+    // authoritative Worker/DO path; tests and older local flows may still use
+    // the broadcast fallback.
     const shapeId = `shape:img-${newId()}`;
-    deps.broadcast({
-      type: "canvas:create_shape",
-      shape: {
-        id: shapeId,
-        type: "image",
-        x,
-        y,
-        props: {
-          url,
-          w: GENERATED_IMAGE_CANVAS,
-          h: GENERATED_IMAGE_CANVAS,
-          nativeW: GENERATED_IMAGE_W,
-          nativeH: GENERATED_IMAGE_H,
-        },
+    const shape = {
+      id: shapeId,
+      type: "image",
+      x,
+      y,
+      props: {
+        url,
+        w: GENERATED_IMAGE_CANVAS,
+        h: GENERATED_IMAGE_CANVAS,
+        nativeW: GENERATED_IMAGE_W,
+        nativeH: GENERATED_IMAGE_H,
       },
-    });
+    };
+
+    if (deps.createShape) {
+      const created = await deps.createShape(shape);
+      if (!created.ok) {
+        return jsonResponse({ error: created.text }, created.res.status);
+      }
+    } else {
+      deps.broadcast({ type: "canvas:create_shape", shape });
+    }
 
     return jsonResponse({ url, shapeId }, 200);
   }

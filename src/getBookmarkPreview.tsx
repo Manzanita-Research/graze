@@ -4,6 +4,14 @@ import {
   type TLBookmarkAsset,
   getHashForString,
 } from "tldraw";
+import { API_URL } from "./config";
+
+interface BookmarkPreviewResponse {
+  description?: string;
+  image?: string;
+  favicon?: string;
+  title?: string;
+}
 
 // How does our server handle bookmark unfurling?
 export async function getBookmarkPreview({
@@ -28,8 +36,10 @@ export async function getBookmarkPreview({
 
   try {
     // try to fetch the preview data from the server
-    const response = await fetch(`/api/unfurl?url=${encodeURIComponent(url)}`);
-    const data: any = await response.json();
+    const response = await fetch(
+      `${API_URL}/api/unfurl?url=${encodeURIComponent(url)}`,
+    );
+    const data = (await response.json()) as BookmarkPreviewResponse;
 
     // fill in our asset with whatever info we found
     asset.props.description = data?.description ?? "";

@@ -9,6 +9,15 @@ const QUALITY = "low" as const;
 const ASPECT_RATIO = "1:1" as const;
 const OUTPUT_FORMAT = "png" as const;
 const NUMBER_OF_IMAGES = 1 as const;
+const MAX_INPUT_IMAGES = 3;
+const MAX_INPUT_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_TOTAL_INPUT_IMAGE_BYTES = 16 * 1024 * 1024;
+const MAX_OUTPUT_BYTES = 12 * 1024 * 1024;
+const ACCEPTED_INPUT_IMAGE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+]);
 
 interface ReplicateInput {
   prompt: string;
@@ -107,6 +116,8 @@ export async function handleImageGeneration(
     images = form
       .getAll("image")
       .filter((entry): entry is File => entry instanceof File);
+    const validationError = validateInputImages(images);
+    if (validationError) return validationError;
   } else {
     let body: unknown;
     try {
@@ -142,7 +153,7 @@ export async function handleImageGeneration(
     for (const file of images) {
       const buf = await file.arrayBuffer();
       const b64 = bytesToBase64(new Uint8Array(buf));
-      inputImages.push(`data:image/png;base64,${b64}`);
+      inputImages.push(`${file.type};base64,${b64}`.replace(/^/, "data:"));
     }
     input.input_images = inputImages;
   }
@@ -179,7 +190,14 @@ export async function handleImageGeneration(
         502,
       );
     }
+    const contentLength = parseContentLength(res.headers.get("content-length"));
+    if (contentLength !== null && contentLength > MAX_OUTPUT_BYTES) {
+      return error(413, "generated image output is too large");
+    }
     bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.byteLength > MAX_OUTPUT_BYTES) {
+      return error(413, "generated image output is too large");
+    }
   } catch (err) {
     const { status, message } = extractUpstreamError(err);
     return jsonResponse({ error: { status, message } }, 502);
@@ -191,6 +209,33 @@ export async function handleImageGeneration(
   });
 
   return jsonResponse({ url: `/api/uploads/${id}` }, 200);
+}
+
+function validateInputImages(images: File[]): Response | null {
+  if (images.length > MAX_INPUT_IMAGES) {
+    return error(413, `too many image inputs (max ${MAX_INPUT_IMAGES})`);
+  }
+
+  let total = 0;
+  for (const file of images) {
+    if (!ACCEPTED_INPUT_IMAGE_TYPES.has(file.type)) {
+      return error(415, `unsupported image type: ${file.type || "unknown"}`);
+    }
+    if (file.size > MAX_INPUT_IMAGE_BYTES) {
+      return error(413, "image input is too large");
+    }
+    total += file.size;
+  }
+  if (total > MAX_TOTAL_INPUT_IMAGE_BYTES) {
+    return error(413, "total image input size is too large");
+  }
+  return null;
+}
+
+function parseContentLength(value: string | null): number | null {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function jsonResponse(body: unknown, status: number): Response {

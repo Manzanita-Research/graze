@@ -1,5 +1,7 @@
 import { error, type IRequest } from "itty-router";
 
+type CloudflareCacheStorage = CacheStorage & { readonly default: Cache };
+
 // assets are stored in the bucket under the /uploads path
 function getAssetObjectName(uploadId: string) {
   return `uploads/${uploadId.replace(/[^a-zA-Z0-9_-]+/g, "_")}`;
@@ -35,10 +37,11 @@ export async function handleAssetDownload(
   ctx: ExecutionContext,
 ) {
   const objectName = getAssetObjectName(request.params.uploadId);
+  const defaultCache = (caches as CloudflareCacheStorage).default;
 
   // if we have a cached response for this request (automatically handling ranges etc.), return it
   const cacheKey = new Request(request.url, { headers: request.headers });
-  const cachedResponse = await caches.default.match(cacheKey);
+  const cachedResponse = await defaultCache.match(cacheKey);
   if (cachedResponse) {
     return cachedResponse;
   }
@@ -107,7 +110,7 @@ export async function handleAssetDownload(
   if (status === 200) {
     const [cacheBody, responseBody] = body!.tee();
     ctx.waitUntil(
-      caches.default.put(
+      defaultCache.put(
         cacheKey,
         new Response(cacheBody, { headers, status }),
       ),

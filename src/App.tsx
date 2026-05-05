@@ -6,9 +6,9 @@ import {
   DefaultHorizontalAlignStyle,
   createShapeId,
   Vec,
-  AssetRecordType,
   renderPlaintextFromRichText,
   type TLShape,
+  type TLHighlightShape,
   type TLShapeId,
 } from "tldraw";
 import { useSync } from "@tldraw/sync";
@@ -22,9 +22,8 @@ import {
   isTextOnlySelection,
 } from "./imagePromptComposition";
 import { evaluateZoomDetent } from "./zoomDetent";
+import { API_URL } from "./config";
 
-const API_URL =
-  import.meta.env.VITE_API_URL || "http://localhost:3737";
 const WS_URL = new URL("/ws", API_URL.replace(/^http/, "ws")).toString();
 const SYNC_URL = `ws://${window.location.host}`;
 
@@ -207,10 +206,19 @@ const TOOLS = [
   },
 ];
 
-/** Native image size returned by gpt-image-2 at 1024x1024. */
-const GENERATED_IMAGE_NATIVE = 1024;
 /** Canvas display size for both the placeholder and the final image shape. */
 const GENERATED_IMAGE_CANVAS = 384;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isCompleteHighlight(shape: TLShape): boolean {
+  return (
+    shape.type === "highlight" &&
+    (shape as TLHighlightShape).props.isComplete
+  );
+}
 
 const IMAGE_ICON = (
   <svg
@@ -288,49 +296,6 @@ function removePlaceholder(editor: Editor, id: TLShapeId) {
   if (editor.getShape(id)) editor.deleteShapes([id]);
 }
 
-/**
- * Create a real tldraw image shape referencing a registered asset at the
- * position currently occupied by the placeholder (or fallback bounds).
- * Must be called AFTER the placeholder has been deleted.
- */
-function createImageShape(
-  editor: Editor,
-  url: string,
-  x: number,
-  y: number,
-): TLShapeId {
-  const assetId = AssetRecordType.createId();
-  editor.createAssets([
-    {
-      id: assetId,
-      type: "image",
-      typeName: "asset",
-      meta: {},
-      props: {
-        name: "generated.png",
-        src: url,
-        w: GENERATED_IMAGE_NATIVE,
-        h: GENERATED_IMAGE_NATIVE,
-        mimeType: "image/png",
-        isAnimated: false,
-      },
-    },
-  ]);
-  const shapeId = createShapeId();
-  editor.createShape({
-    id: shapeId,
-    type: "image",
-    x,
-    y,
-    props: {
-      assetId,
-      w: GENERATED_IMAGE_CANVAS,
-      h: GENERATED_IMAGE_CANVAS,
-    },
-  });
-  return shapeId;
-}
-
 type ImageGenerationOutcome =
   | { kind: "ok"; shapeId: TLShapeId; url: string }
   | { kind: "error"; message: string };
@@ -345,9 +310,9 @@ interface GenerateImageOptions {
  * Orchestrate a single image-generation round:
  *   1. Classify the selection (text-only vs visual/mixed vs empty).
  *   2. Create a placeholder shape.
- *   3. POST to `/api/images/generate` (JSON or multipart).
- *   4. On success, remove placeholder and create an image shape with a
- *      registered asset so it round-trips through @tldraw/sync.
+ *   3. POST to the Bun `/api/canvas/generate_image` bridge.
+ *   4. On success, remove the placeholder; the authoritative Worker/DO path
+ *      creates the final synced image shape.
  *   5. On error, remove placeholder and return a user-visible error message.
  */
 async function generateImage(
@@ -371,41 +336,29 @@ async function generateImage(
   const targetY = placeholder?.y ?? 100;
 
   try {
-    let request: Request;
+    let prompt: string;
+    let referenceShapeIds: string[] | undefined;
     if (isVisual) {
-      // Rasterize the selection and POST multipart.
-      const image = await editor.toImage(selectedIds, {
-        format: "png",
-        pixelRatio: 2,
-        background: true,
-        padding: 16,
-      });
-      if (!image) throw new Error("Could not rasterize the selection");
-      const form = new FormData();
-      form.append("prompt", typedPrompt.trim());
-      form.append(
-        "image",
-        new File([image.blob], "selection.png", { type: "image/png" }),
-      );
-      request = new Request("/api/images/generate", {
-        method: "POST",
-        body: form,
-        signal,
-      });
+      prompt = typedPrompt.trim();
+      referenceShapeIds = selectedIds;
     } else {
       const shapeTexts = hasSelection
         ? selectedShapes.map((s) => getShapeText(editor, s))
         : [];
-      const prompt = buildPromptFromSelection(typedPrompt, shapeTexts);
-      request = new Request("/api/images/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
-        signal,
-      });
+      prompt = buildPromptFromSelection(typedPrompt, shapeTexts);
     }
 
-    const res = await fetch(request);
+    const res = await fetch(`${API_URL}/api/canvas/generate_image`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt,
+        referenceShapeIds,
+        x: targetX,
+        y: targetY,
+      }),
+      signal,
+    });
     if (!res.ok) {
       let message = `Request failed with status ${res.status}`;
       try {
@@ -421,12 +374,15 @@ async function generateImage(
       throw new Error(message);
     }
 
-    const body = (await res.json()) as { url?: string };
+    const body = (await res.json()) as { url?: string; shapeId?: string };
     const url = body?.url;
     if (!url) throw new Error("Backend returned no image URL");
+    const shapeId =
+      typeof body.shapeId === "string"
+        ? (body.shapeId as TLShapeId)
+        : createShapeId();
 
     removePlaceholder(editor, placeholderId);
-    const shapeId = createImageShape(editor, url, targetX, targetY);
     return { kind: "ok", shapeId, url };
   } catch (err) {
     removePlaceholder(editor, placeholderId);
@@ -503,42 +459,6 @@ function getNextY(editor: Editor): number {
     }
   }
   return maxBottom + 40;
-}
-
-/** Create a note shape on the canvas for an agent message */
-function createAgentShape(editor: Editor, text: string, id: string) {
-  const y = getNextY(editor);
-  const shapeId = createShapeId(id);
-
-  editor.createShape({
-    id: shapeId,
-    type: "note",
-    x: 120,
-    y,
-    props: {
-      richText: toRichText(text),
-      color: "yellow",
-      size: "m",
-    },
-  });
-}
-
-/** Create a note shape for a human message */
-function createHumanShape(editor: Editor, text: string, id: string) {
-  const y = getNextY(editor);
-  const shapeId = createShapeId(id);
-
-  editor.createShape({
-    id: shapeId,
-    type: "note",
-    x: 120,
-    y,
-    props: {
-      richText: toRichText(text),
-      color: "yellow",
-      size: "m",
-    },
-  });
 }
 
 /** Zoom helpers */
@@ -1100,103 +1020,20 @@ function App() {
 
   // Connect WebSocket and handle shape creation events
   useEffect(() => {
+    let disposed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
     function connect() {
+      if (disposed) return;
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
 
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
+          const data: unknown = JSON.parse(event.data);
+          if (!isRecord(data)) return;
           const editor = editorRef.current;
           if (!editor) return;
-
-          // Agent reply → create shape on canvas
-          if (data.type === "shape:created" && data.message) {
-            const msg = data.message;
-            if (msg.from === "agent") {
-              createAgentShape(editor, msg.text, msg.id);
-            }
-          }
-
-          // Human message → also create shape on canvas (from other devices)
-          if (data.type === "message:created" && data.message) {
-            const msg = data.message;
-            if (msg.from === "human") {
-              createHumanShape(editor, msg.text, msg.id);
-            }
-          }
-
-          // Agent creates an arbitrary shape
-          if (data.type === "canvas:create_shape" && data.shape) {
-            const s = data.shape;
-            // Server-emitted ids may be pre-prefixed ("shape:img-..."); only
-            // run them through createShapeId when the prefix is missing.
-            const rawId = typeof s.id === "string" ? s.id : undefined;
-            const shapeId = rawId
-              ? rawId.startsWith("shape:")
-                ? (rawId as TLShapeId)
-                : createShapeId(rawId)
-              : createShapeId();
-
-            // Special case: image shapes must go through the asset system so
-            // they round-trip through @tldraw/sync (same pattern as the
-            // canvas-UI feature).
-            if (s.type === "image") {
-              const props = (s.props as Record<string, unknown>) ?? {};
-              const url = typeof props.url === "string" ? props.url : undefined;
-              if (!url) return;
-              const w =
-                typeof props.w === "number"
-                  ? props.w
-                  : GENERATED_IMAGE_CANVAS;
-              const h =
-                typeof props.h === "number"
-                  ? props.h
-                  : GENERATED_IMAGE_CANVAS;
-              const nativeW =
-                typeof props.nativeW === "number"
-                  ? props.nativeW
-                  : GENERATED_IMAGE_NATIVE;
-              const nativeH =
-                typeof props.nativeH === "number"
-                  ? props.nativeH
-                  : GENERATED_IMAGE_NATIVE;
-
-              const assetId = AssetRecordType.createId();
-              editor.createAssets([
-                {
-                  id: assetId,
-                  type: "image",
-                  typeName: "asset",
-                  meta: {},
-                  props: {
-                    name: "generated.png",
-                    src: url,
-                    w: nativeW,
-                    h: nativeH,
-                    mimeType: "image/png",
-                    isAnimated: false,
-                  },
-                },
-              ]);
-              editor.createShape({
-                id: shapeId,
-                type: "image",
-                x: (s.x as number) ?? 0,
-                y: (s.y as number) ?? 0,
-                props: { assetId, w, h },
-              });
-              return;
-            }
-
-            editor.createShape({
-              id: shapeId,
-              type: ((s.type as string) ?? "geo") as "geo",
-              x: (s.x as number) ?? 0,
-              y: (s.y as number) ?? 0,
-              props: (s.props as Record<string, unknown>) ?? {},
-            } as any);
-          }
 
           // Server wants the frontend to rasterize a selection and POST the
           // resulting data URL back, correlated by requestId.
@@ -1207,62 +1044,43 @@ function App() {
           ) {
             void rasterizeAndRespond(
               editor,
-              data.requestId as string,
-              data.shapeIds as string[],
+              data.requestId,
+              data.shapeIds.filter(
+                (shapeId): shapeId is string => typeof shapeId === "string",
+              ),
             );
-          }
-
-          // Agent updates a shape's props
-          if (data.type === "canvas:update_shape") {
-            const shapes = editor.getCurrentPageShapes();
-            const target =
-              shapes.find((sh) => sh.id === data.shapeId) ??
-              shapes.find((sh) => sh.id.endsWith(data.shapeId));
-            if (target) {
-              try {
-                editor.updateShape({
-                  id: target.id,
-                  type: target.type,
-                  props: data.props,
-                });
-              } catch (err) {
-                console.error("canvas:update_shape failed", err);
-              }
-            }
-          }
-
-          // Agent deletes shapes
-          if (data.type === "canvas:delete_shapes" && data.shapeIds) {
-            const shapes = editor.getCurrentPageShapes();
-            const ids = shapes
-              .filter((sh) =>
-                data.shapeIds.some((sid: string) => sh.id.includes(sid)),
-              )
-              .map((sh) => sh.id);
-            if (ids.length > 0) editor.deleteShapes(ids);
           }
 
           // Agent moves viewport
           if (data.type === "canvas:move_viewport") {
-            const zoom = data.zoom ?? editor.getZoomLevel();
+            const x = typeof data.x === "number" ? data.x : 0;
+            const y = typeof data.y === "number" ? data.y : 0;
+            const zoom =
+              typeof data.zoom === "number" ? data.zoom : editor.getZoomLevel();
             editor.setCamera(
-              { x: -(data.x as number), y: -(data.y as number), z: zoom },
+              { x: -x, y: -y, z: zoom },
               {
                 animation: { duration: 300 },
               },
             );
           }
-        } catch {}
+        } catch (err) {
+          console.error("Failed to handle Graze WebSocket message:", err);
+        }
       };
 
       ws.onclose = () => {
-        setTimeout(connect, 2000);
+        if (disposed) return;
+        reconnectTimer = setTimeout(connect, 2000);
       };
     }
 
     connect();
     return () => {
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       wsRef.current?.close();
+      wsRef.current = null;
     };
   }, []);
 
@@ -1289,11 +1107,7 @@ function App() {
     editor.registerExternalAssetHandler("url", getBookmarkPreview);
 
     editor.sideEffects.registerAfterChangeHandler("shape", (prev, next) => {
-      if (
-        next.type === "highlight" &&
-        !(prev.props as any).isComplete &&
-        (next.props as any).isComplete
-      ) {
+      if (!isCompleteHighlight(prev) && isCompleteHighlight(next)) {
         editor.sendToBack([next.id]);
       }
     });
