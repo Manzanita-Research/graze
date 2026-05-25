@@ -1,0 +1,133 @@
+---
+import "../styles/global.css";
+
+const notes = [
+  {
+    title: "A canvas both of you can reach",
+    body: "Sketch a messy architecture thought, press the snapshot key, and let your agent answer in shapes instead of another wall of chat.",
+  },
+  {
+    title: "Built for private agent work",
+    body: "Graze speaks MCP, writes through an authoritative tldraw store, and expects a real access boundary when you take it beyond localhost.",
+  },
+  {
+    title: "Spatial memory beats scrollback",
+    body: "Questions, diagrams, caveats, and generated images can stay where they belong: next to the thing you were thinking about.",
+  },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Graze is a shared sketchbook for you and your AI agents."
+    />
+    <title>Graze, a shared sketchbook for agents</title>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="site-header" aria-label="Primary navigation">
+        <a class="brand" href="/">
+          <span class="brand-mark" aria-hidden="true">Gz</span>
+          <span>Graze</span>
+        </a>
+        <nav class="header-nav">
+          <a href="#how">How it works</a>
+          <a href="#signup">Sign up</a>
+          <a class="button secondary" href="http://localhost:5173/">Open app</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="hero" aria-labelledby="hero-title">
+          <div class="hero-copy">
+            <h1 id="hero-title">Touch grass. <span>Keep canvas.</span></h1>
+            <p class="hero-lede">
+              Graze is a shared sketchbook for you and your agents: napkin
+              diagrams, quick notes, UI sketches, and agent replies in the same
+              place.
+            </p>
+            <div class="hero-actions">
+              <a class="button" href="#signup">Sign up for access</a>
+              <a class="button secondary" href="#how">See the shape of it</a>
+            </div>
+            <p class="small-note">
+              MCP-native. tldraw-powered. Best paired with a private network,
+              a little sunlight, and fewer terminal tabs.
+            </p>
+          </div>
+
+          <figure class="product-photo">
+            <img
+              src="/graze-canvas-smoke.png"
+              alt="A Graze canvas with handwritten notes, arrows, and a live smoke-test lane."
+              width="720"
+              height="1080"
+            />
+            <figcaption class="product-caption">
+              A real shared canvas, not a fake dashboard screenshot.
+            </figcaption>
+          </figure>
+        </section>
+
+        <section class="section field-notes" id="how" aria-labelledby="how-title">
+          <div>
+            <h2 id="how-title">Agent work, with a surface.</h2>
+          </div>
+          <div class="note-list">
+            {
+              notes.map((note, index) => (
+                <article class="note-item">
+                  <span class="note-number">{String(index + 1).padStart(2, "0")}</span>
+                  <div>
+                    <h3>{note.title}</h3>
+                    <p>{note.body}</p>
+                  </div>
+                </article>
+              ))
+            }
+          </div>
+        </section>
+
+        <section class="quote-band" aria-label="Positioning">
+          <div class="quote-inner">
+            <p>It is a napkin you both can reach.</p>
+            <span>
+              Graze gives the agent a way to point, arrange, revise, and leave
+              things where your eyes can find them later.
+            </span>
+          </div>
+        </section>
+
+        <section class="section signup" id="signup" aria-labelledby="signup-title">
+          <div>
+            <h2 id="signup-title">Come graze with us.</h2>
+            <p>
+              We are opening this carefully for builders who want agents to work
+              on a shared visual surface. Leave an email and we will send the
+              next access note when the pasture gate opens.
+            </p>
+          </div>
+          <div>
+            <form class="signup-form" action="mailto:hello@manzanita.com" method="post">
+              <label class="sr-only" for="email">Email address</label>
+              <input id="email" name="email" type="email" placeholder="you@example.com" required />
+              <button type="submit">Sign up</button>
+            </form>
+            <p class="signup-footnote">
+              No drip campaign. Just a note when there is something worth trying.
+            </p>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <span>A Manzanita Research project.</span>
+      </footer>
+    </div>
+  </body>
+</html>

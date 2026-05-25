@@ -11,6 +11,9 @@
     "server": "bun run server/index.ts",
     "mcp": "bun run mcp/index.ts",
     "smoke:canvas": "node scripts/smoke-canvas.mjs",
+    "site:dev": "astro dev --root site",
+    "site:build": "astro build --root site",
+    "site:preview": "astro preview --root site",
     "dev:all": "npx concurrently -n server,vite -c blue,green \"bun run server\" \"bun run dev\"",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings"
   },
@@ -36,6 +39,7 @@
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
+    "astro": "^6.2.2",
     "concurrently": "^9.2.1",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",

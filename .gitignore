@@ -1,5 +1,8 @@
 node_modules/
 dist/
+site/.astro/
+site/dist/
+site/screenshots/
 .env
 .DS_Store
 .wrangler/
